@@ -1,0 +1,10 @@
+server{
+    listen 80;
+    server_name _;
+    root /home/ubuntu/app/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }    
+}

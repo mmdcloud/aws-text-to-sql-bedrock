@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50;
+  }
+}
+
+.react-player {
+  aspect-ratio: 16/9;
+  width: 100% !important;
+  height: auto !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-400 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-500;
+}
+
+/* Custom range input styling */
+input[type="range"] {
+  @apply h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  @apply w-4 h-4 bg-indigo-600 rounded-full appearance-none;
+}
+
+/* Smooth transitions */
+/* .transition-all {
+  @apply transition-all duration-200 ease-in-out;
+} */
+
+/* Table styles */
+.table-row-hover {
+  @apply hover:bg-indigo-50 transition-colors duration-150 ease-in-out;
+}
