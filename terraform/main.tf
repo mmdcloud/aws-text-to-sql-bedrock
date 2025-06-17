@@ -1,7 +1,12 @@
+# Registering vault provider
+data "vault_generic_secret" "rds" {
+  path = "secret/rds"
+}
+
 # VPC Configuration
 module "vpc" {
   source                = "./modules/vpc/vpc"
-  vpc_name              = "mediaconvert-vpc"
+  vpc_name              = "vpc"
   vpc_cidr_block        = "10.0.0.0/16"
   enable_dns_hostnames  = true
   enable_dns_support    = true
@@ -12,7 +17,7 @@ module "vpc" {
 module "security_group" {
   source = "./modules/vpc/security_groups"
   vpc_id = module.vpc.vpc_id
-  name   = "mediaconvert-security-group"
+  name   = "security-group"
   ingress = [
     {
       from_port       = 80
@@ -43,10 +48,35 @@ module "security_group" {
   ]
 }
 
+module "rds_security_group" {
+  source = "./modules/vpc/security_groups"
+  vpc_id = module.vpc.vpc_id
+  name   = "rds-security-group"
+  ingress = [
+    {
+      from_port       = 3306
+      to_port         = 3306
+      protocol        = "tcp"
+      self            = "false"
+      cidr_blocks     = ["0.0.0.0/0"]
+      security_groups = []
+      description     = "any"
+    }
+  ]
+  egress = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+}
+
 # Public Subnets
 module "public_subnets" {
   source = "./modules/vpc/subnets"
-  name   = "mediaconvert-public-subnet"
+  name   = "public-subnet"
   subnets = [
     {
       subnet = "10.0.1.0/24"
@@ -68,19 +98,19 @@ module "public_subnets" {
 # Private Subnets
 module "private_subnets" {
   source = "./modules/vpc/subnets"
-  name   = "mediaconvert-private-subnet"
+  name   = "private-subnet"
   subnets = [
     {
       subnet = "10.0.6.0/24"
-      az     = "us-east-1d"
+      az     = "us-east-1c"
     },
     {
       subnet = "10.0.5.0/24"
-      az     = "us-east-1e"
+      az     = "us-east-1b"
     },
     {
       subnet = "10.0.4.0/24"
-      az     = "us-east-1f"
+      az     = "us-east-1a"
     }
   ]
   vpc_id                  = module.vpc.vpc_id
@@ -90,7 +120,7 @@ module "private_subnets" {
 # Public Route Table
 module "public_rt" {
   source  = "./modules/vpc/route_tables"
-  name    = "mediaconvert-public-route-table"
+  name    = "public-route-table"
   subnets = module.public_subnets.subnets[*]
   routes = [
     {
@@ -104,7 +134,7 @@ module "public_rt" {
 # Private Route Table
 module "private_rt" {
   source  = "./modules/vpc/route_tables"
-  name    = "mediaconvert-private-route-table"
+  name    = "private-route-table"
   subnets = module.private_subnets.subnets[*]
   routes  = []
   vpc_id  = module.vpc.vpc_id
@@ -123,6 +153,61 @@ data "aws_ami" "ubuntu" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+}
+
+module "db_credentials" {
+  source                  = "./modules/secrets-manager"
+  name                    = "rds_secrets"
+  description             = "rds_secrets"
+  recovery_window_in_days = 0
+  secret_string = jsonencode({
+    username = tostring(data.vault_generic_secret.rds.data["username"])
+    password = tostring(data.vault_generic_secret.rds.data["password"])
+  })
+}
+
+module "db" {
+  source                          = "./modules/rds"
+  db_name                         = "db"
+  allocated_storage               = 20
+  engine                          = "mysql"
+  engine_version                  = "8.0"
+  instance_class                  = "db.t3.medium"
+  multi_az                        = true
+  username                        = tostring(data.vault_generic_secret.rds.data["username"])
+  password                        = tostring(data.vault_generic_secret.rds.data["password"])
+  subnet_group_name               = "rds_subnet_group"
+  enabled_cloudwatch_logs_exports = ["audit", "error", "general", "slowquery"]
+  backup_retention_period         = 35
+  backup_window                   = "03:00-06:00"
+  subnet_group_ids = [
+    module.public_subnets.subnets[0].id,
+    module.public_subnets.subnets[1].id,
+    module.public_subnets.subnets[2].id
+  ]
+  vpc_security_group_ids                = [module.rds_security_group.id]
+  publicly_accessible                   = false
+  deletion_protection                   = false
+  skip_final_snapshot                   = true
+  max_allocated_storage                 = 40
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7
+  parameter_group_name                  = "db-pg"
+  parameter_group_family                = "mysql8.0"
+  parameters = [
+    {
+      name  = "max_connections"
+      value = "1000"
+    },
+    {
+      name  = "innodb_buffer_pool_size"
+      value = "{DBInstanceClassMemory*3/4}"
+    },
+    {
+      name  = "slow_query_log"
+      value = "1"
+    }
+  ]
 }
 
 # EC2 IAM Instance Profile
