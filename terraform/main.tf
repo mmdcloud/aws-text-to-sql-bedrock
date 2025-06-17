@@ -266,30 +266,10 @@ module "frontend_instance" {
   security_groups             = [module.security_group.id]
 }
 
-module "blog_storage_bucket" {
-  source             = "./modules/s3"
-  bucket_name        = "blogstoragebucket"
-  objects            = []
-  versioning_enabled = "Enabled"
-  bucket_notification = {
-    queue           = []
-    lambda_function = []
-  }
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["PUT", "POST", "GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
-  force_destroy = true
-}
-
 # Lambda Function Code Bucket
 module "lambda_function_code_bucket" {
   source      = "./modules/s3"
-  bucket_name = "lambdafunctioncodebucket"
+  bucket_name = "texttosqllambdafunctioncodebucket"
   objects = [
     {
       key    = "lambda_function.zip"
@@ -362,21 +342,21 @@ module "lambda_function" {
 }
 
 # API Gateway configuration
-resource "aws_api_gateway_rest_api" "blog_api" {
-  name = "blog-api"
+resource "aws_api_gateway_rest_api" "text_to_sql_api" {
+  name = "text-to-sql-api"
   endpoint_configuration {
     types = ["REGIONAL"]
   }
 }
 
 resource "aws_api_gateway_resource" "resource_api" {
-  rest_api_id = aws_api_gateway_rest_api.blog_api.id
-  parent_id   = aws_api_gateway_rest_api.blog_api.root_resource_id
+  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
+  parent_id   = aws_api_gateway_rest_api.text_to_sql_api.root_resource_id
   path_part   = "api"
 }
 
-resource "aws_api_gateway_method" "blog_api_method" {
-  rest_api_id      = aws_api_gateway_rest_api.blog_api.id
+resource "aws_api_gateway_method" "text_to_sql_api_method" {
+  rest_api_id      = aws_api_gateway_rest_api.text_to_sql_api.id
   resource_id      = aws_api_gateway_resource.resource_api.id
   api_key_required = false
   http_method      = "POST"
@@ -384,25 +364,25 @@ resource "aws_api_gateway_method" "blog_api_method" {
 }
 
 resource "aws_api_gateway_integration" "resource_api_method_integration" {
-  rest_api_id             = aws_api_gateway_rest_api.blog_api.id
+  rest_api_id             = aws_api_gateway_rest_api.text_to_sql_api.id
   resource_id             = aws_api_gateway_resource.resource_api.id
-  http_method             = aws_api_gateway_method.blog_api_method.http_method
+  http_method             = aws_api_gateway_method.text_to_sql_api_method.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = module.lambda_function.invoke_arn
 }
 
 resource "aws_api_gateway_method_response" "resource_api_method_response" {
-  rest_api_id = aws_api_gateway_rest_api.blog_api.id
+  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
   resource_id = aws_api_gateway_resource.resource_api.id
-  http_method = aws_api_gateway_method.blog_api_method.http_method
+  http_method = aws_api_gateway_method.text_to_sql_api_method.http_method
   status_code = "200"
 }
 
 resource "aws_api_gateway_integration_response" "resource_api_method_integration_response_200" {
-  rest_api_id = aws_api_gateway_rest_api.blog_api.id
+  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
   resource_id = aws_api_gateway_resource.resource_api.id
-  http_method = aws_api_gateway_method.blog_api_method.http_method
+  http_method = aws_api_gateway_method.text_to_sql_api_method.http_method
   status_code = aws_api_gateway_method_response.resource_api_method_response.status_code
   depends_on = [
     aws_api_gateway_integration.resource_api_method_integration
@@ -410,7 +390,7 @@ resource "aws_api_gateway_integration_response" "resource_api_method_integration
 }
 
 resource "aws_api_gateway_deployment" "api_deployment" {
-  rest_api_id = aws_api_gateway_rest_api.blog_api.id
+  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
   lifecycle {
     create_before_destroy = true
   }
@@ -419,6 +399,6 @@ resource "aws_api_gateway_deployment" "api_deployment" {
 
 resource "aws_api_gateway_stage" "api_stage" {
   deployment_id = aws_api_gateway_deployment.api_deployment.id
-  rest_api_id   = aws_api_gateway_rest_api.blog_api.id
+  rest_api_id   = aws_api_gateway_rest_api.text_to_sql_api.id
   stage_name    = "dev"
 }
