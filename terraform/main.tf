@@ -1,9 +1,13 @@
+# ---------------------------------------------------------------------
 # Registering vault provider
+# ---------------------------------------------------------------------
 data "vault_generic_secret" "rds" {
   path = "secret/rds"
 }
 
+# ---------------------------------------------------------------------
 # VPC Configuration
+# ---------------------------------------------------------------------
 module "vpc" {
   source                = "./modules/vpc/vpc"
   vpc_name              = "vpc"
@@ -13,11 +17,44 @@ module "vpc" {
   internet_gateway_name = "vpc_igw"
 }
 
-# Security Group
-module "security_group" {
+module "frontend_lb_sg" {
   source = "./modules/vpc/security_groups"
   vpc_id = module.vpc.vpc_id
-  name   = "security-group"
+  name   = "frontend-lb-sg"
+  ingress = [
+    {
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      self            = "false"
+      cidr_blocks     = ["0.0.0.0/0"]
+      security_groups = []
+      description     = "HTTP traffic"
+    },
+    {
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      self            = "false"
+      cidr_blocks     = ["0.0.0.0/0"]
+      security_groups = []
+      description     = "HTTPS traffic"
+    }
+  ]
+  egress = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+}
+
+module "backend_lb_sg" {
+  source = "./modules/vpc/security_groups"
+  vpc_id = module.vpc.vpc_id
+  name   = "backend-lb-sg"
   ingress = [
     {
       from_port       = 80
@@ -29,12 +66,62 @@ module "security_group" {
       description     = "any"
     },
     {
-      from_port       = 22
-      to_port         = 22
+      from_port       = 443
+      to_port         = 443
       protocol        = "tcp"
       self            = "false"
       cidr_blocks     = ["0.0.0.0/0"]
       security_groups = []
+      description     = "HTTPS traffic"
+    }
+  ]
+  egress = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+}
+
+module "ecs_frontend_sg" {
+  source = "./modules/vpc/security_groups"
+  vpc_id = module.vpc.vpc_id
+  name   = "ecs-frontend-sg"
+  ingress = [
+    {
+      from_port       = 3000
+      to_port         = 3000
+      protocol        = "tcp"
+      self            = "false"
+      cidr_blocks     = []
+      security_groups = [module.frontend_lb_sg.id]
+      description     = "any"
+    }
+  ]
+  egress = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+}
+
+module "ecs_backend_sg" {
+  source = "./modules/vpc/security_groups"
+  vpc_id = module.vpc.vpc_id
+  name   = "ecs-backend-sg"
+  ingress = [
+    {
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      self            = "false"
+      cidr_blocks     = []
+      security_groups = [module.backend_lb_sg.id]
       description     = "any"
     }
   ]
@@ -140,21 +227,9 @@ module "private_rt" {
   vpc_id  = module.vpc.vpc_id
 }
 
-# Frontend Module
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
+# -----------------------------------------------------------------------------------------
+# Secrets Manager
+# -----------------------------------------------------------------------------------------
 module "db_credentials" {
   source                  = "./modules/secrets-manager"
   name                    = "rds_secrets"
@@ -166,6 +241,30 @@ module "db_credentials" {
   })
 }
 
+# -----------------------------------------------------------------------------------------
+# ECR Module
+# -----------------------------------------------------------------------------------------
+module "frontend_container_registry" {
+  source               = "./modules/ecr"
+  force_delete         = true
+  scan_on_push         = false
+  image_tag_mutability = "IMMUTABLE"
+  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region} http://${module.carshub_backend_lb.lb_dns_name} ${module.carshub_media_cloudfront_distribution.domain_name}"
+  name                 = "frontend-td"
+}
+
+module "backend_container_registry" {
+  source               = "./modules/ecr"
+  force_delete         = true
+  scan_on_push         = false
+  image_tag_mutability = "IMMUTABLE"
+  bash_command         = "bash ${path.cwd}/../src/backend/api/artifact_push.sh backend-td ${var.region}"
+  name                 = "backend-td"
+}
+
+# ---------------------------------------------------------------------
+# DB configuration
+# ---------------------------------------------------------------------
 module "db" {
   source                          = "./modules/rds"
   db_name                         = "db"
@@ -210,195 +309,305 @@ module "db" {
   ]
 }
 
-# EC2 IAM Instance Profile
-data "aws_iam_policy_document" "instance_profile_assume_role" {
-  statement {
-    effect = "Allow"
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-
-    actions = ["sts:AssumeRole"]
-  }
-}
-
-resource "aws_iam_role" "instance_profile_iam_role" {
-  name               = "instance-profile-role"
-  path               = "/"
-  assume_role_policy = data.aws_iam_policy_document.instance_profile_assume_role.json
-}
-
-data "aws_iam_policy_document" "instance_profile_policy_document" {
-  statement {
-    effect    = "Allow"
-    actions   = ["s3:*"]
-    resources = ["*"]
-  }
-  statement {
-    effect    = "Allow"
-    actions   = ["cloudwatch:*"]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role_policy" "instance_profile_s3_policy" {
-  role   = aws_iam_role.instance_profile_iam_role.name
-  policy = data.aws_iam_policy_document.instance_profile_policy_document.json
-}
-
-resource "aws_iam_instance_profile" "iam_instance_profile" {
-  name = "iam-instance-profile"
-  role = aws_iam_role.instance_profile_iam_role.name
-}
-
-module "frontend_instance" {
-  source                      = "./modules/ec2"
-  name                        = "frontend-instance"
-  ami_id                      = data.aws_ami.ubuntu.id
-  instance_type               = "t2.micro"
-  key_name                    = "madmaxkeypair"
-  associate_public_ip_address = true
-  user_data                   = filebase64("${path.module}/scripts/user_data.sh")
-  instance_profile            = aws_iam_instance_profile.iam_instance_profile.name
-  subnet_id                   = module.public_subnets.subnets[0].id
-  security_groups             = [module.security_group.id]
-}
-
-# Lambda Function Code Bucket
-module "lambda_function_code_bucket" {
-  source      = "./modules/s3"
-  bucket_name = "texttosqllambdafunctioncodebucket"
-  objects = [
+# -----------------------------------------------------------------------------------------
+# Load Balancer Configuration
+# -----------------------------------------------------------------------------------------
+module "frontend_lb" {
+  source                     = "./modules/load-balancer"
+  lb_name                    = "frontend-lb"
+  lb_is_internal             = false
+  lb_ip_address_type         = "ipv4"
+  load_balancer_type         = "application"
+  drop_invalid_header_fields = true
+  enable_deletion_protection = false
+  security_groups            = [module.carshub_frontend_lb_sg.id]
+  subnets                    = module.carshub_public_subnets.subnets[*].id
+  target_groups = [
     {
-      key    = "lambda_function.zip"
-      source = "./files/lambda_function.zip"
+      target_group_name      = "frontend-tg"
+      target_port            = 3000
+      target_ip_address_type = "ipv4"
+      target_protocol        = "HTTP"
+      target_type            = "ip"
+      target_vpc_id          = module.vpc.vpc_id
+
+      health_check_interval            = 30
+      health_check_path                = "/auth/signin"
+      health_check_enabled             = true
+      health_check_protocol            = "HTTP"
+      health_check_timeout             = 5
+      health_check_healthy_threshold   = 3
+      health_check_unhealthy_threshold = 3
+      health_check_port                = 3000
+
     }
   ]
-  versioning_enabled = "Enabled"
-  cors = [
+  listeners = [
     {
-      allowed_headers = ["*"]
-      allowed_methods = ["PUT", "POST", "GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
-  force_destroy = true
-}
-
-# Lambda function IAM Role
-module "lambda_function_iam_role" {
-  source             = "./modules/iam"
-  role_name          = "lambda_function_iam_role"
-  role_description   = "lambda_function_iam_role"
-  policy_name        = "lambda_function_iam_policy"
-  policy_description = "lambda_function_iam_policy"
-  assume_role_policy = <<EOF
-    {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Action": "sts:AssumeRole",
-                "Principal": {
-                  "Service": "lambda.amazonaws.com"
-                },
-                "Effect": "Allow",
-                "Sid": ""
-            }
-        ]
-    }
-    EOF
-  policy             = <<EOF
-    {
-      "Version": "2012-10-17",
-      "Statement": [
+      listener_port     = 80
+      listener_protocol = "HTTP"
+      certificate_arn   = null
+      default_actions = [
         {
-            "Action": [
-                "logs:CreateLogGroup",
-                "logs:CreateLogStream",
-                "logs:PutLogEvents"
-            ],
-            "Resource": "arn:aws:logs:*:*:*",
-            "Effect": "Allow"
+          type             = "forward"
+          target_group_arn = module.carshub_frontend_lb.target_groups[0].arn
         }
       ]
     }
-    EOF
-}
-
-# Lambda function to generate response and store them to s3
-module "lambda_function" {
-  source        = "./modules/lambda"
-  function_name = "lambda_function"
-  role_arn      = module.lambda_function_iam_role.arn
-  env_variables = {}
-  handler       = "lambda_function.lambda_handler"
-  runtime       = "python3.12"
-  s3_bucket     = module.lambda_function_code_bucket.bucket
-  s3_key        = "lambda_function.zip"
-  depends_on    = [module.lambda_function_code_bucket]
-}
-
-# API Gateway configuration
-resource "aws_api_gateway_rest_api" "text_to_sql_api" {
-  name = "text-to-sql-api"
-  endpoint_configuration {
-    types = ["REGIONAL"]
-  }
-}
-
-resource "aws_api_gateway_resource" "resource_api" {
-  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
-  parent_id   = aws_api_gateway_rest_api.text_to_sql_api.root_resource_id
-  path_part   = "api"
-}
-
-resource "aws_api_gateway_method" "text_to_sql_api_method" {
-  rest_api_id      = aws_api_gateway_rest_api.text_to_sql_api.id
-  resource_id      = aws_api_gateway_resource.resource_api.id
-  api_key_required = false
-  http_method      = "POST"
-  authorization    = "NONE"
-}
-
-resource "aws_api_gateway_integration" "resource_api_method_integration" {
-  rest_api_id             = aws_api_gateway_rest_api.text_to_sql_api.id
-  resource_id             = aws_api_gateway_resource.resource_api.id
-  http_method             = aws_api_gateway_method.text_to_sql_api_method.http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = module.lambda_function.invoke_arn
-}
-
-resource "aws_api_gateway_method_response" "resource_api_method_response" {
-  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
-  resource_id = aws_api_gateway_resource.resource_api.id
-  http_method = aws_api_gateway_method.text_to_sql_api_method.http_method
-  status_code = "200"
-}
-
-resource "aws_api_gateway_integration_response" "resource_api_method_integration_response_200" {
-  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
-  resource_id = aws_api_gateway_resource.resource_api.id
-  http_method = aws_api_gateway_method.text_to_sql_api_method.http_method
-  status_code = aws_api_gateway_method_response.resource_api_method_response.status_code
-  depends_on = [
-    aws_api_gateway_integration.resource_api_method_integration
   ]
 }
 
-resource "aws_api_gateway_deployment" "api_deployment" {
-  rest_api_id = aws_api_gateway_rest_api.text_to_sql_api.id
-  lifecycle {
-    create_before_destroy = true
-  }
-  depends_on = [aws_api_gateway_integration.resource_api_method_integration, aws_api_gateway_integration.resource_api_method_integration]
+module "backend_lb" {
+  source                     = "./modules/load-balancer"
+  lb_name                    = "backend-lb"
+  lb_is_internal             = false
+  lb_ip_address_type         = "ipv4"
+  load_balancer_type         = "application"
+  drop_invalid_header_fields = true
+  enable_deletion_protection = false
+  security_groups            = [module.carshub_frontend_lb_sg.id]
+  subnets                    = module.carshub_public_subnets.subnets[*].id
+  target_groups = [
+    {
+      target_group_name      = "backend-tg"
+      target_port            = 3000
+      target_ip_address_type = "ipv4"
+      target_protocol        = "HTTP"
+      target_type            = "ip"
+      target_vpc_id          = module.vpc.vpc_id
+
+      health_check_interval            = 30
+      health_check_path                = "/auth/signin"
+      health_check_enabled             = true
+      health_check_protocol            = "HTTP"
+      health_check_timeout             = 5
+      health_check_healthy_threshold   = 3
+      health_check_unhealthy_threshold = 3
+      health_check_port                = 3000
+
+    }
+  ]
+  listeners = [
+    {
+      listener_port     = 80
+      listener_protocol = "HTTP"
+      certificate_arn   = null
+      default_actions = [
+        {
+          type             = "forward"
+          target_group_arn = module.carshub_frontend_lb.target_groups[0].arn
+        }
+      ]
+    }
+  ]
 }
 
-resource "aws_api_gateway_stage" "api_stage" {
-  deployment_id = aws_api_gateway_deployment.api_deployment.id
-  rest_api_id   = aws_api_gateway_rest_api.text_to_sql_api.id
-  stage_name    = "dev"
+# ---------------------------------------------------------------------
+# ECS configuration
+# ---------------------------------------------------------------------
+
+resource "aws_ecs_cluster" "ecs_cluster" {
+  name = "ecs-cluster-"
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+}
+
+module "frontend_ecs" {
+  source                                   = "./modules/ecs"
+  task_definition_family                   = "frontend-task-definition"
+  task_definition_requires_compatibilities = ["FARGATE"]
+  task_definition_cpu                      = 2048
+  task_definition_memory                   = 4096
+  task_definition_execution_role_arn       = module.ecs_task_execution_role.arn
+  task_definition_task_role_arn            = module.ecs_task_execution_role.arn
+  task_definition_network_mode             = "awsvpc"
+  task_definition_cpu_architecture         = "X86_64"
+  task_definition_operating_system_family  = "LINUX"
+  task_definition_container_definitions = jsonencode(
+    [
+      {
+        "name" : "frontend-td",
+        "image" : "${module.frontend_container_registry.repository_url}:latest",
+        "cpu" : 1024,
+        "memory" : 2048,
+        "placementStrategy" : [
+          { "type" : "spread", "field" : "attribute:ecs.availability-zone" }
+        ]
+        "essential" : true,
+        "healthCheck" : {
+          "command" : ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"],
+          "interval" : 30,
+          "timeout" : 5,
+          "retries" : 3,
+          "startPeriod" : 60
+        },
+        "ulimits" : [
+          {
+            "name" : "nofile",
+            "softLimit" : 65536,
+            "hardLimit" : 65536
+          }
+        ]
+        "portMappings" : [
+          {
+            "containerPort" : 3000,
+            "hostPort" : 3000,
+            "name" : "frontend-td"
+          }
+        ],
+        "logConfiguration" : {
+          "logDriver" : "awslogs",
+          "options" : {
+            "awslogs-group" : "${module.frontend_ecs_log_group.name}",
+            "awslogs-region" : "${var.region}",
+            "awslogs-stream-prefix" : "ecs"
+          }
+        },
+        environment = [
+          {
+            name  = "BASE_URL"
+            value = "${module.backend_lb.lb_dns_name}"
+          }
+        ]
+      },
+      {
+        "name" : "xray-daemon",
+        "image" : "amazon/aws-xray-daemon",
+        "cpu" : 32,
+        "memoryReservation" : 256,
+        "portMappings" : [
+          {
+            "containerPort" : 2000,
+            "protocol" : "udp"
+          }
+        ]
+      },
+  ])
+
+  service_name                = "frontend-ecs-service"
+  service_cluster             = aws_ecs_cluster.ecs_cluster.id
+  service_launch_type         = "FARGATE"
+  service_scheduling_strategy = "REPLICA"
+  service_desired_count       = 2
+  deployment_controller_type = "ECS"
+  load_balancer_config = [{
+    container_name   = "frontend-td"
+    container_port   = 3000
+    target_group_arn = module.frontend_lb.target_groups[0].arn
+  }]
+  security_groups = [module.ecs_frontend_sg.id]
+  subnets = [
+    module.private_subnets.subnets[0].id,
+    module.private_subnets.subnets[1].id,
+    module.private_subnets.subnets[2].id
+  ]
+  assign_public_ip = false
+}
+
+module "backend_ecs" {
+  source                                   = "./modules/ecs"
+  task_definition_family                   = "backend-task-definition"
+  task_definition_requires_compatibilities = ["FARGATE"]
+  task_definition_cpu                      = 2048
+  task_definition_memory                   = 4096
+  task_definition_execution_role_arn       = module.ecs_task_execution_role.arn
+  task_definition_task_role_arn            = module.ecs_task_execution_role.arn
+  task_definition_network_mode             = "awsvpc"
+  task_definition_cpu_architecture         = "X86_64"
+  task_definition_operating_system_family  = "LINUX"
+  task_definition_container_definitions = jsonencode(
+    [
+      {
+        "name" : "backend-td",
+        "image" : "${module.backend_container_registry.repository_url}:latest",
+        "cpu" : 1024,
+        "memory" : 2048,
+        "placementStrategy" : [
+          { "type" : "spread", "field" : "attribute:ecs.availability-zone" }
+        ]
+        "essential" : true,
+        "secrets" : [
+          {
+            "name" : "UN",
+            "valueFrom" : "${module.db_credentials.arn}:username::"
+          },
+          {
+            "name" : "CREDS",
+            "valueFrom" : "${module.db_credentials.arn}:password::"
+          }
+        ],
+        "healthCheck" : {
+          "command" : ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"],
+          "interval" : 30,
+          "timeout" : 5,
+          "retries" : 3,
+          "startPeriod" : 60
+        },
+        "ulimits" : [
+          {
+            "name" : "nofile",
+            "softLimit" : 65536,
+            "hardLimit" : 65536
+          }
+        ]
+        "portMappings" : [
+          {
+            "containerPort" : 80,
+            "hostPort" : 80,
+            "name" : "backend-td"
+          }
+        ],
+        "logConfiguration" : {
+          "logDriver" : "awslogs",
+          "options" : {
+            "awslogs-group" : "${module.backend_ecs_log_group.name}",
+            "awslogs-region" : "${var.region}",
+            "awslogs-stream-prefix" : "ecs"
+          }
+        },
+        environment = [
+          {
+            name  = "DB_PATH"
+            value = "${tostring(split(":", module.db.endpoint)[0])}"
+          },
+          {
+            name  = "DB_NAME"
+            value = "${module.db.name}"
+          }
+        ]
+      },
+      {
+        "name" : "xray-daemon",
+        "image" : "amazon/aws-xray-daemon",
+        "cpu" : 32,
+        "memoryReservation" : 256,
+        "portMappings" : [
+          {
+            "containerPort" : 2000,
+            "protocol" : "udp"
+          }
+        ]
+      }
+  ])
+
+  service_name                = "backend-ecs-service"
+  service_cluster             = aws_ecs_cluster.ecs_cluster.id
+  service_launch_type         = "FARGATE"
+  service_scheduling_strategy = "REPLICA"
+  service_desired_count       = 2
+  deployment_controller_type = "ECS"
+  load_balancer_config = [{
+    container_name   = "backend-td"
+    container_port   = 80
+    target_group_arn = module.backend_lb.target_groups[0].arn
+  }]
+  security_groups = [module.ecs_backend_sg.id]
+  subnets = [
+    module.private_subnets.subnets[0].id,
+    module.private_subnets.subnets[1].id,
+    module.private_subnets.subnets[2].id
+  ]
+  assign_public_ip = false
 }
