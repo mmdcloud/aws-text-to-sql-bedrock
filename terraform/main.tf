@@ -1,3 +1,9 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
+data "aws_region" "current" {}
+
 # ---------------------------------------------------------------------
 # Registering vault provider
 # ---------------------------------------------------------------------
@@ -491,7 +497,7 @@ module "frontend_ecs" {
   service_launch_type         = "FARGATE"
   service_scheduling_strategy = "REPLICA"
   service_desired_count       = 2
-  deployment_controller_type = "ECS"
+  deployment_controller_type  = "ECS"
   load_balancer_config = [{
     container_name   = "frontend-td"
     container_port   = 3000
@@ -597,7 +603,7 @@ module "backend_ecs" {
   service_launch_type         = "FARGATE"
   service_scheduling_strategy = "REPLICA"
   service_desired_count       = 2
-  deployment_controller_type = "ECS"
+  deployment_controller_type  = "ECS"
   load_balancer_config = [{
     container_name   = "backend-td"
     container_port   = 80
@@ -610,4 +616,83 @@ module "backend_ecs" {
     module.private_subnets.subnets[2].id
   ]
   assign_public_ip = false
+}
+
+# ---------------------------------------------------------------------
+# Bedrock Configuration
+# ---------------------------------------------------------------------
+data "aws_iam_policy_document" "texttosql_bedrock_agent_trust" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      identifiers = ["bedrock.amazonaws.com"]
+      type        = "Service"
+    }
+    condition {
+      test     = "StringEquals"
+      values   = [data.aws_caller_identity.current.account_id]
+      variable = "aws:SourceAccount"
+    }
+    condition {
+      test     = "ArnLike"
+      values   = ["arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:agent/*"]
+      variable = "AWS:SourceArn"
+    }
+  }
+}
+
+data "aws_iam_policy_document" "texttosql_bedrock_agent_permissions" {
+  statement {
+    actions = ["bedrock:InvokeModel"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/anthropic.claude-v2",
+    ]
+  }
+}
+
+resource "aws_iam_role" "texttosql_bedrock_agent_role" {
+  assume_role_policy = data.aws_iam_policy_document.example_agent_trust.json
+  name_prefix        = "AmazonBedrockExecutionRoleForAgents_"
+}
+
+resource "aws_iam_role_policy" "texttosql_bedrock_agent_role_policy" {
+  policy = data.aws_iam_policy_document.texttosql_bedrock_agent_permissions.json
+  role   = aws_iam_role.texttosql_bedrock_agent_role.id
+}
+
+resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
+  agent_name                  = "texttosql-bedrock-agent"
+  agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
+  idle_session_ttl_in_seconds = 500
+  foundation_model            = "anthropic.claude-v2"
+}
+
+resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_base" {
+  name     = "texttosql-bedrock-agent-knowledge-base"
+  role_arn = aws_iam_role.texttosql_bedrock_agent_role.arn
+  knowledge_base_configuration {
+    vector_knowledge_base_configuration {
+      embedding_model_arn = "arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0"
+    }
+    type = "VECTOR"
+  }
+  storage_configuration {
+    type = "OPENSEARCH_SERVERLESS"
+    opensearch_serverless_configuration {
+      collection_arn    = "arn:aws:aoss:us-west-2:123456789012:collection/142bezjddq707i5stcrf"
+      vector_index_name = "bedrock-knowledge-base-default-index"
+      field_mapping {
+        vector_field   = "bedrock-knowledge-base-default-vector"
+        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
+        metadata_field = "AMAZON_BEDROCK_METADATA"
+      }
+    }
+  }
+}
+
+resource "aws_bedrockagent_agent_knowledge_base_association" "texttosql_bedrock_agent_knowledge_base_association" {
+  agent_id             = aws_bedrockagent_agent.texttosql_bedrock_agent.agent_id
+  description          = "Example Knowledge base"
+  knowledge_base_id    = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
+  knowledge_base_state = "ENABLED"
 }
