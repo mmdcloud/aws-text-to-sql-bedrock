@@ -677,15 +677,26 @@ resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_ba
     type = "VECTOR"
   }
   storage_configuration {
-    type = "OPENSEARCH_SERVERLESS"
-    opensearch_serverless_configuration {
-      collection_arn    = "arn:aws:aoss:us-west-2:123456789012:collection/142bezjddq707i5stcrf"
-      vector_index_name = "bedrock-knowledge-base-default-index"
+    type = "PINECONE"
+    pinecone_configuration {
+      connection_string      = ""
+      credentials_secret_arn = ""
+      namespace              = ""
       field_mapping {
-        vector_field   = "bedrock-knowledge-base-default-vector"
         text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
         metadata_field = "AMAZON_BEDROCK_METADATA"
       }
+    }
+  }
+}
+
+resource "aws_bedrockagent_data_source" "texttosql_bedrock_agent_data_source" {
+  knowledge_base_id = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
+  name              = "example"
+  data_source_configuration {
+    type = "S3"
+    s3_configuration {
+      bucket_arn = "arn:aws:s3:::example-bucket"
     }
   }
 }
