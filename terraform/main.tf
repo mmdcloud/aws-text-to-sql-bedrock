@@ -248,6 +248,32 @@ module "db_credentials" {
 }
 
 # -----------------------------------------------------------------------------------------
+# S3 Module
+# -----------------------------------------------------------------------------------------
+module "bedrock_knowledge_base_data_source" {
+  source        = "./modules/s3"
+  bucket_name   = "bedrock-knowledge-base-data-source"
+  objects       = []
+  bucket_policy = ""
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    },
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["PUT"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  versioning_enabled = "Enabled"
+  force_destroy      = true
+}
+
+# -----------------------------------------------------------------------------------------
 # ECR Module
 # -----------------------------------------------------------------------------------------
 module "frontend_container_registry" {
@@ -621,6 +647,7 @@ module "backend_ecs" {
 # ---------------------------------------------------------------------
 # Bedrock Configuration
 # ---------------------------------------------------------------------
+
 data "aws_iam_policy_document" "texttosql_bedrock_agent_trust" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -651,7 +678,7 @@ data "aws_iam_policy_document" "texttosql_bedrock_agent_permissions" {
 }
 
 resource "aws_iam_role" "texttosql_bedrock_agent_role" {
-  assume_role_policy = data.aws_iam_policy_document.example_agent_trust.json
+  assume_role_policy = data.aws_iam_policy_document.texttosql_bedrock_agent_trust.json
   name_prefix        = "AmazonBedrockExecutionRoleForAgents_"
 }
 
@@ -664,7 +691,7 @@ resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
   agent_name                  = "texttosql-bedrock-agent"
   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
   idle_session_ttl_in_seconds = 500
-  foundation_model            = "anthropic.claude-v2"
+  foundation_model            = "anthropic.claude-v4"
 }
 
 resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_base" {
@@ -692,18 +719,18 @@ resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_ba
 
 resource "aws_bedrockagent_data_source" "texttosql_bedrock_agent_data_source" {
   knowledge_base_id = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
-  name              = "example"
+  name              = "texttosql-bedrock-agent-data-source"
   data_source_configuration {
     type = "S3"
     s3_configuration {
-      bucket_arn = "arn:aws:s3:::example-bucket"
+      bucket_arn = "${module.bedrock_knowledge_base_data_source.arn}"
     }
   }
 }
 
 resource "aws_bedrockagent_agent_knowledge_base_association" "texttosql_bedrock_agent_knowledge_base_association" {
   agent_id             = aws_bedrockagent_agent.texttosql_bedrock_agent.agent_id
-  description          = "Example Knowledge base"
+  description          = "texttosql-bedrock-agent-knowledge-base-association"
   knowledge_base_id    = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
   knowledge_base_state = "ENABLED"
 }
