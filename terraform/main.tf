@@ -233,6 +233,44 @@ module "private_rt" {
   vpc_id  = module.vpc.vpc_id
 }
 
+# ---------------------------------------------------------------------
+# Cognito Configuration
+# ---------------------------------------------------------------------
+module "cognito" {
+  source                     = "./modules/cognito"
+  name                       = "text-to-sql-users"
+  username_attributes        = ["email"]
+  auto_verified_attributes   = ["email"]
+  password_minimum_length    = 8
+  password_require_lowercase = true
+  password_require_numbers   = true
+  password_require_symbols   = true
+  password_require_uppercase = true
+  schema = [
+    {
+      attribute_data_type = "String"
+      name                = "email"
+      required            = true
+    }
+  ]
+  verification_message_template_default_email_option = "CONFIRM_WITH_CODE"
+  verification_email_subject                         = "Verify your email for TextToSQL"
+  verification_email_message                         = "Your verification code is {####}"
+  user_pool_clients = [
+    {
+      name                                 = "texttosql_client"
+      generate_secret                      = false
+      explicit_auth_flows                  = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
+      allowed_oauth_flows_user_pool_client = true
+      allowed_oauth_flows                  = ["code", "implicit"]
+      allowed_oauth_scopes                 = ["email", "openid"]
+      callback_urls                        = ["https://example.com/callback"]
+      logout_urls                          = ["https://example.com/logout"]
+      supported_identity_providers         = ["COGNITO"]
+    }
+  ]
+}
+
 # -----------------------------------------------------------------------------------------
 # Secrets Manager
 # -----------------------------------------------------------------------------------------
