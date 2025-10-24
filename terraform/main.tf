@@ -475,9 +475,8 @@ module "backend_lb" {
 # ---------------------------------------------------------------------
 # ECS configuration
 # ---------------------------------------------------------------------
-
 resource "aws_ecs_cluster" "ecs_cluster" {
-  name = "ecs-cluster-"
+  name = "texttosql-ecs-cluster"
   setting {
     name  = "containerInsights"
     value = "enabled"
@@ -685,7 +684,6 @@ module "backend_ecs" {
 # ---------------------------------------------------------------------
 # Bedrock Configuration
 # ---------------------------------------------------------------------
-
 data "aws_iam_policy_document" "texttosql_bedrock_agent_trust" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -730,6 +728,9 @@ resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
   idle_session_ttl_in_seconds = 500
   foundation_model            = "anthropic.claude-v4"
+  guardrail_configuration = [{
+    guardrail_identifier = aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_id  
+  }]
 }
 
 resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_base" {
@@ -758,6 +759,7 @@ resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_ba
 resource "aws_bedrockagent_data_source" "texttosql_bedrock_agent_data_source" {
   knowledge_base_id = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
   name              = "texttosql-bedrock-agent-data-source"
+  description       = "TextToSQL Bedrock Agent Data Source"
   data_source_configuration {
     type = "S3"
     s3_configuration {
