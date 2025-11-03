@@ -11,23 +11,27 @@ data "vault_generic_secret" "rds" {
   path = "secret/rds"
 }
 
+data "vault_generic_secret" "pinecone" {
+  path = "secret/pinecone"
+}
+
 # ---------------------------------------------------------------------
 # VPC Configuration
 # ---------------------------------------------------------------------
 module "vpc" {
-  source = "./modules/vpc"
-  vpc_name = "vpc"
-  vpc_cidr = "10.0.0.0/16"
-  azs             = var.azs
-  public_subnets  = var.public_subnets
-  private_subnets = var.private_subnets
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-  create_igw = true
+  source                  = "./modules/vpc"
+  vpc_name                = "vpc"
+  vpc_cidr                = "10.0.0.0/16"
+  azs                     = var.azs
+  public_subnets          = var.public_subnets
+  private_subnets         = var.private_subnets
+  enable_dns_hostnames    = true
+  enable_dns_support      = true
+  create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway     = true
-  single_nat_gateway     = false
-  one_nat_gateway_per_az = true
+  enable_nat_gateway      = true
+  single_nat_gateway      = false
+  one_nat_gateway_per_az  = true
   tags = {
     Environment = "${var.env}"
     Project     = "carshub"
@@ -35,8 +39,8 @@ module "vpc" {
 }
 
 resource "aws_security_group" "frontend_lb_sg" {
-  name        = "frontend-lb-sg"
-  vpc_id      = module.vpc.vpc_id
+  name   = "frontend-lb-sg"
+  vpc_id = module.vpc.vpc_id
 
   ingress {
     description = "HTTP traffic"
@@ -67,8 +71,8 @@ resource "aws_security_group" "frontend_lb_sg" {
 }
 
 resource "aws_security_group" "backend_lb_sg" {
-  name        = "backend-lb-sg"
-  vpc_id      = module.vpc.vpc_id
+  name   = "backend-lb-sg"
+  vpc_id = module.vpc.vpc_id
 
   ingress {
     description = "HTTP traffic"
@@ -99,14 +103,14 @@ resource "aws_security_group" "backend_lb_sg" {
 }
 
 resource "aws_security_group" "ecs_frontend_sg" {
-  name        = "ecs-frontend-sg"
-  vpc_id      = module.vpc.vpc_id
+  name   = "ecs-frontend-sg"
+  vpc_id = module.vpc.vpc_id
 
   ingress {
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = []
+    from_port       = 3000
+    to_port         = 3000
+    protocol        = "tcp"
+    cidr_blocks     = []
     security_groups = [aws_security_group.frontend_lb_sg.id]
   }
 
@@ -123,14 +127,14 @@ resource "aws_security_group" "ecs_frontend_sg" {
 }
 
 resource "aws_security_group" "ecs_backend_sg" {
-  name        = "ecs-backend-sg"
-  vpc_id      = module.vpc.vpc_id
+  name   = "ecs-backend-sg"
+  vpc_id = module.vpc.vpc_id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = []
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    cidr_blocks     = []
     security_groups = [aws_security_group.backend_lb_sg.id]
   }
 
@@ -147,14 +151,14 @@ resource "aws_security_group" "ecs_backend_sg" {
 }
 
 resource "aws_security_group" "rds_sg" {
-  name        = "rds-sg"
-  vpc_id      = module.vpc.vpc_id
+  name   = "rds-sg"
+  vpc_id = module.vpc.vpc_id
 
   ingress {
-    from_port   = 3306
-    to_port     = 3306
-    protocol    = "tcp"
-    cidr_blocks = []
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    cidr_blocks     = []
     security_groups = [aws_security_group.ecs_backend_sg.id]
   }
 
@@ -219,6 +223,16 @@ module "db_credentials" {
   secret_string = jsonencode({
     username = tostring(data.vault_generic_secret.rds.data["username"])
     password = tostring(data.vault_generic_secret.rds.data["password"])
+  })
+}
+
+module "pinecone_api_key" {
+  source                  = "./modules/secrets-manager"
+  name                    = "pinecone_api_key"
+  description             = "pinecone_api_key"
+  recovery_window_in_days = 0
+  secret_string           = jsonencode({
+    api_key = tostring(data.vault_generic_secret.pinecone.data["api_key"])
   })
 }
 
@@ -319,6 +333,78 @@ module "db" {
 # -----------------------------------------------------------------------------------------
 # Load Balancer Configuration
 # -----------------------------------------------------------------------------------------
+
+module "frontend_lb" {
+  source  = "terraform-aws-modules/alb/aws"
+  name    = "frontend-lb"
+  vpc_id  = module.vpc.vpc_id
+  subnets = module.vpc.public_subnets
+
+  # Security Group
+  security_group_ingress_rules = {
+    all_http = {
+      from_port   = 80
+      to_port     = 80
+      ip_protocol = "tcp"
+      description = "HTTP web traffic"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+    all_https = {
+      from_port   = 443
+      to_port     = 443
+      ip_protocol = "tcp"
+      description = "HTTPS web traffic"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+  }
+  security_group_egress_rules = {
+    all = {
+      ip_protocol = "-1"
+      cidr_ipv4   = "10.0.0.0/16"
+    }
+  }
+
+  access_logs = {
+    bucket = "my-alb-logs"
+  }
+
+  listeners = {
+    ex-http-https-redirect = {
+      port     = 80
+      protocol = "HTTP"
+      redirect = {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+    ex-https = {
+      port            = 443
+      protocol        = "HTTPS"
+      certificate_arn = "arn:aws:iam::123456789012:server-certificate/test_cert-123456789012"
+
+      forward = {
+        target_group_key = "ex-instance"
+      }
+    }
+  }
+
+  target_groups = {
+    ex-instance = {
+      name_prefix = "h1"
+      protocol    = "HTTP"
+      port        = 80
+      target_type = "instance"
+      target_id   = "i-0f6d38a07d50d080f"
+    }
+  }
+
+  tags = {
+    Environment = "Development"
+    Project     = "Example"
+  }
+}
+
 module "frontend_lb" {
   source                     = "./modules/load-balancer"
   lb_name                    = "frontend-lb"
@@ -682,9 +768,9 @@ resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_ba
   storage_configuration {
     type = "PINECONE"
     pinecone_configuration {
-      connection_string      = ""
-      credentials_secret_arn = ""
-      namespace              = ""
+      connection_string      = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
+      credentials_secret_arn = "${module.pinecone_api_key.arn}"
+      namespace              = "__default__"
       field_mapping {
         text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
         metadata_field = "AMAZON_BEDROCK_METADATA"
