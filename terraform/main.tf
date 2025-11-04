@@ -30,11 +30,10 @@ module "vpc" {
   create_igw              = true
   map_public_ip_on_launch = true
   enable_nat_gateway      = true
-  single_nat_gateway      = false
-  one_nat_gateway_per_az  = true
+  single_nat_gateway      = true
+  one_nat_gateway_per_az  = false
   tags = {
-    Environment = "${var.env}"
-    Project     = "carshub"
+    Project = "text-to-sql"
   }
 }
 
@@ -205,8 +204,8 @@ module "cognito" {
       allowed_oauth_flows_user_pool_client = true
       allowed_oauth_flows                  = ["code", "implicit"]
       allowed_oauth_scopes                 = ["email", "openid"]
-      callback_urls                        = ["https://example.com/callback"]
-      logout_urls                          = ["https://example.com/logout"]
+      callback_urls                        = ["http://${module.frontend_lb.dns_name}/callback"]
+      logout_urls                          = ["http://${module.frontend_lb.dns_name}/logout"]
       supported_identity_providers         = ["COGNITO"]
     }
   ]
@@ -231,7 +230,7 @@ module "pinecone_api_key" {
   name                    = "pinecone_api_key"
   description             = "pinecone_api_key"
   recovery_window_in_days = 0
-  secret_string           = jsonencode({
+  secret_string = jsonencode({
     api_key = tostring(data.vault_generic_secret.pinecone.data["api_key"])
   })
 }
@@ -262,6 +261,52 @@ module "bedrock_knowledge_base_data_source" {
   force_destroy      = true
 }
 
+module "frontend_lb_logs" {
+  source        = "./modules/s3"
+  bucket_name   = "frontend-lb-logs"
+  objects       = []
+  bucket_policy = ""
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    },
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["PUT"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  versioning_enabled = "Enabled"
+  force_destroy      = true
+}
+
+module "backend_lb_logs" {
+  source        = "./modules/s3"
+  bucket_name   = "backend-lb-logs"
+  objects       = []
+  bucket_policy = ""
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    },
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["PUT"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  versioning_enabled = "Enabled"
+  force_destroy      = true
+}
+
 # -----------------------------------------------------------------------------------------
 # ECR Module
 # -----------------------------------------------------------------------------------------
@@ -270,7 +315,7 @@ module "frontend_container_registry" {
   force_delete         = true
   scan_on_push         = false
   image_tag_mutability = "IMMUTABLE"
-  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region} http://${module.carshub_backend_lb.lb_dns_name} ${module.carshub_media_cloudfront_distribution.domain_name}"
+  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region} http://${module.backend_lb.dns_name}"
   name                 = "frontend-td"
 }
 
@@ -279,7 +324,7 @@ module "backend_container_registry" {
   force_delete         = true
   scan_on_push         = false
   image_tag_mutability = "IMMUTABLE"
-  bash_command         = "bash ${path.cwd}/../src/backend/api/artifact_push.sh backend-td ${var.region}"
+  bash_command         = "bash ${path.cwd}/../src/backend/artifact_push.sh backend-td ${var.region}"
   name                 = "backend-td"
 }
 
@@ -301,9 +346,9 @@ module "db" {
   backup_retention_period         = 35
   backup_window                   = "03:00-06:00"
   subnet_group_ids = [
-    module.public_subnets.subnets[0].id,
-    module.public_subnets.subnets[1].id,
-    module.public_subnets.subnets[2].id
+    module.vpc.public_subnets[0],
+    module.vpc.public_subnets[1],
+    module.vpc.public_subnets[2]
   ]
   vpc_security_group_ids                = [module.rds_security_group.id]
   publicly_accessible                   = false
@@ -333,171 +378,413 @@ module "db" {
 # -----------------------------------------------------------------------------------------
 # Load Balancer Configuration
 # -----------------------------------------------------------------------------------------
-
 module "frontend_lb" {
-  source  = "terraform-aws-modules/alb/aws"
-  name    = "frontend-lb"
-  vpc_id  = module.vpc.vpc_id
-  subnets = module.vpc.public_subnets
-
-  # Security Group
-  security_group_ingress_rules = {
-    all_http = {
-      from_port   = 80
-      to_port     = 80
-      ip_protocol = "tcp"
-      description = "HTTP web traffic"
-      cidr_ipv4   = "0.0.0.0/0"
-    }
-    all_https = {
-      from_port   = 443
-      to_port     = 443
-      ip_protocol = "tcp"
-      description = "HTTPS web traffic"
-      cidr_ipv4   = "0.0.0.0/0"
-    }
-  }
-  security_group_egress_rules = {
-    all = {
-      ip_protocol = "-1"
-      cidr_ipv4   = "10.0.0.0/16"
-    }
-  }
-
+  source                     = "terraform-aws-modules/alb/aws"
+  name                       = "frontend-lb"
+  load_balancer_type         = "application"
+  vpc_id                     = module.vpc.vpc_id
+  subnets                    = module.vpc.public_subnets
+  enable_deletion_protection = false
+  drop_invalid_header_fields = true
+  ip_address_type         = "ipv4"
+  internal                = false
+  security_groups = [
+    aws_security_group.frontend_lb_sg.id
+  ]
   access_logs = {
-    bucket = "my-alb-logs"
+    bucket = "${module.frontend_lb_logs.bucket}"
   }
-
   listeners = {
-    ex-http-https-redirect = {
+    frontend_lb_http_listener = {
       port     = 80
       protocol = "HTTP"
-      redirect = {
-        port        = "443"
-        protocol    = "HTTPS"
-        status_code = "HTTP_301"
-      }
-    }
-    ex-https = {
-      port            = 443
-      protocol        = "HTTPS"
-      certificate_arn = "arn:aws:iam::123456789012:server-certificate/test_cert-123456789012"
-
       forward = {
-        target_group_key = "ex-instance"
+        target_group_key = "frontend_lb_target_group"
       }
     }
   }
-
   target_groups = {
-    ex-instance = {
-      name_prefix = "h1"
-      protocol    = "HTTP"
-      port        = 80
-      target_type = "instance"
-      target_id   = "i-0f6d38a07d50d080f"
+    frontend_lb_target_group = {
+      backend_protocol                  = "HTTP"
+      backend_port                      = 3000
+      target_type                       = "ip"
+      health_check = {
+        enabled             = true
+        healthy_threshold   = 3
+        interval            = 30
+        path                = "/auth/signin"
+        port                = 3000
+        protocol            = "HTTP"
+        unhealthy_threshold = 3
+      }
+      create_attachment = false
     }
   }
-
   tags = {
-    Environment = "Development"
-    Project     = "Example"
+    Project = "text-to-sql-frontend-lb"
   }
-}
-
-module "frontend_lb" {
-  source                     = "./modules/load-balancer"
-  lb_name                    = "frontend-lb"
-  lb_is_internal             = false
-  lb_ip_address_type         = "ipv4"
-  load_balancer_type         = "application"
-  drop_invalid_header_fields = true
-  enable_deletion_protection = false
-  security_groups            = [module.carshub_frontend_lb_sg.id]
-  subnets                    = module.carshub_public_subnets.subnets[*].id
-  target_groups = [
-    {
-      target_group_name      = "frontend-tg"
-      target_port            = 3000
-      target_ip_address_type = "ipv4"
-      target_protocol        = "HTTP"
-      target_type            = "ip"
-      target_vpc_id          = module.vpc.vpc_id
-
-      health_check_interval            = 30
-      health_check_path                = "/auth/signin"
-      health_check_enabled             = true
-      health_check_protocol            = "HTTP"
-      health_check_timeout             = 5
-      health_check_healthy_threshold   = 3
-      health_check_unhealthy_threshold = 3
-      health_check_port                = 3000
-
-    }
-  ]
-  listeners = [
-    {
-      listener_port     = 80
-      listener_protocol = "HTTP"
-      certificate_arn   = null
-      default_actions = [
-        {
-          type             = "forward"
-          target_group_arn = module.carshub_frontend_lb.target_groups[0].arn
-        }
-      ]
-    }
-  ]
 }
 
 module "backend_lb" {
-  source                     = "./modules/load-balancer"
-  lb_name                    = "backend-lb"
-  lb_is_internal             = false
-  lb_ip_address_type         = "ipv4"
+  source                     = "terraform-aws-modules/alb/aws"
+  name                       = "backend-lb"
   load_balancer_type         = "application"
-  drop_invalid_header_fields = true
+  vpc_id                     = module.vpc.vpc_id
+  subnets                    = module.vpc.public_subnets
   enable_deletion_protection = false
-  security_groups            = [module.carshub_frontend_lb_sg.id]
-  subnets                    = module.carshub_public_subnets.subnets[*].id
-  target_groups = [
-    {
-      target_group_name      = "backend-tg"
-      target_port            = 3000
-      target_ip_address_type = "ipv4"
-      target_protocol        = "HTTP"
-      target_type            = "ip"
-      target_vpc_id          = module.vpc.vpc_id
-
-      health_check_interval            = 30
-      health_check_path                = "/auth/signin"
-      health_check_enabled             = true
-      health_check_protocol            = "HTTP"
-      health_check_timeout             = 5
-      health_check_healthy_threshold   = 3
-      health_check_unhealthy_threshold = 3
-      health_check_port                = 3000
-
-    }
+  drop_invalid_header_fields = true
+  ip_address_type         = "ipv4"
+  internal                = false
+  security_groups = [
+    aws_security_group.backend_lb_sg.id
   ]
-  listeners = [
-    {
-      listener_port     = 80
-      listener_protocol = "HTTP"
-      certificate_arn   = null
-      default_actions = [
-        {
-          type             = "forward"
-          target_group_arn = module.carshub_frontend_lb.target_groups[0].arn
-        }
-      ]
+  access_logs = {
+    bucket = "${module.backend_lb_logs.bucket}"
+  }
+  listeners = {
+    backend_lb_http_listener = {
+      port     = 80
+      protocol = "HTTP"
+      forward = {
+        target_group_key = "backend_lb_target_group"
+      }
     }
-  ]
+  }
+  target_groups = {
+    backend_lb_target_group = {
+      backend_protocol                  = "HTTP"
+      backend_port                      = 80
+      target_type                       = "ip"
+      health_check = {
+        enabled             = true
+        healthy_threshold   = 3
+        interval            = 30
+        path                = "/"
+        port                = 80
+        protocol            = "HTTP"
+        unhealthy_threshold = 3
+      }
+      create_attachment = false
+    }
+  }
+  tags = {
+    Project = "text-to-sql-backend-lb"
+  }
 }
 
 # ---------------------------------------------------------------------
 # ECS configuration
 # ---------------------------------------------------------------------
+module "ecs" {
+  source       = "terraform-aws-modules/ecs/aws"
+  cluster_name = "text-to-sql-cluster"
+  default_capacity_provider_strategy = {
+    FARGATE = {
+      weight = 50
+      base   = 20
+    }
+    FARGATE_SPOT = {
+      weight = 50
+    }
+  }
+  autoscaling_capacity_providers = {
+    ASG = {
+      auto_scaling_group_arn         = module.autoscaling.autoscaling_group_arn
+      managed_draining               = "ENABLED"
+      managed_termination_protection = "ENABLED"
+
+      managed_scaling = {
+        maximum_scaling_step_size = 5
+        minimum_scaling_step_size = 1
+        status                    = "ENABLED"
+        target_capacity           = 60
+      }
+    }
+  }
+  services = {
+    ecs-frontend = {
+      cpu    = 1024
+      memory = 4096
+      autoscaling_policies = {
+        predictive = {
+          policy_type = "PredictiveScaling"
+          predictive_scaling_policy_configuration = {
+            mode = "ForecastOnly"
+            metric_specification = [{
+              target_value = 60
+              customized_scaling_metric_specification = {
+                metric_data_query = [
+                  {
+                    id = "cpu_util"
+                    metric_stat = {
+                      stat = "Average"
+                      metric = {
+                        metric_name = "CPUUtilization"
+                        namespace   = "AWS/ECS"
+                        dimension = [
+                          {
+                            name  = "ServiceName"
+                            value = "ecsdemo-frontend"
+                          },
+                          {
+                            name  = "ClusterName"
+                            value = "ex-complete"
+                          }
+                        ]
+                      }
+                    }
+                    return_data = true
+                  }
+                ]
+              }
+              predefined_load_metric_specification = {
+                predefined_metric_type = "ECSServiceTotalCPUUtilization"
+              }
+              # predefined_scaling_metric_specification = {
+              #   predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+              # }
+              # predefined_metric_pair_specification = {
+              #   predefined_metric_type = "ECSServiceMemoryUtilization"
+              # }
+            }]
+          }
+        }
+      }
+      # Container definition(s)
+      container_definitions = {
+        fluent-bit = {
+          cpu       = 512
+          memory    = 1024
+          essential = true
+          image     = nonsensitive(data.aws_ssm_parameter.fluentbit.value)
+          user      = "0"
+          firelensConfiguration = {
+            type = "fluentbit"
+          }
+          memoryReservation = 50
+          cloudwatch_log_group_retention_in_days = 30
+        }
+        (ecs-frontend) = {
+          cpu       = 1024
+          memory    = 2048
+          essential = true
+          image     = "public.ecr.aws/aws-containers/ecsdemo-frontend:776fd50"
+          healthCheck = {
+            command = ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"]
+          }
+          ulimits = [
+            {
+              name      = "nofile"
+              softLimit = 65536
+              hardLimit = 65536
+            }
+          ]
+          portMappings = [
+            {
+              name          = "ecs-frontend"
+              containerPort = 3000
+              hostPort      = 3000
+              protocol      = "tcp"
+            }
+          ]
+          capacity_provider_strategy = {
+            ASG = {
+              base              = 20
+              capacity_provider = "ASG"
+              weight            = 50
+            }
+          }
+          # Example image used requires access to write to root filesystem
+          readonlyRootFilesystem = false
+          dependsOn = [{
+            containerName = "fluent-bit"
+            condition     = "START"
+          }]
+          enable_cloudwatch_logging = false
+          logConfiguration = {
+            logDriver = "awsfirelens"
+            options = {
+              Name                    = "firehose"
+              region                  = local.region
+              delivery_stream         = "my-stream"
+              log-driver-buffer-limit = "2097152"
+            }
+          }
+          memoryReservation = 100
+          restartPolicy = {
+            enabled              = true
+            ignoredExitCodes     = [1]
+            restartAttemptPeriod = 60
+          }
+        }
+      }
+      load_balancer = {
+        service = {
+          target_group_arn = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
+          container_name   = "ecs-frontend"
+          container_port   = 3000
+        }
+      }
+      tasks_iam_role_name        = "${local.name}-tasks"
+      tasks_iam_role_description = "Example tasks IAM role for ${local.name}"
+      tasks_iam_role_policies = {
+        ReadOnlyAccess = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+      }
+      tasks_iam_role_statements = [
+        {
+          actions   = ["s3:List*"]
+          resources = ["arn:aws:s3:::*"]
+        }
+      ]
+      subnet_ids                    = module.vpc.private_subnets
+      vpc_id                        = module.vpc.vpc_id
+      availability_zone_rebalancing = "ENABLED"      
+    }
+
+    ecs-backend = {
+      cpu    = 1024
+      memory = 4096
+      autoscaling_policies = {
+        predictive = {
+          policy_type = "PredictiveScaling"
+          predictive_scaling_policy_configuration = {
+            mode = "ForecastOnly"
+            metric_specification = [{
+              target_value = 60
+              customized_scaling_metric_specification = {
+                metric_data_query = [
+                  {
+                    id = "cpu_util"
+                    metric_stat = {
+                      stat = "Average"
+                      metric = {
+                        metric_name = "CPUUtilization"
+                        namespace   = "AWS/ECS"
+                        dimension = [
+                          {
+                            name  = "ServiceName"
+                            value = "ecsdemo-frontend"
+                          },
+                          {
+                            name  = "ClusterName"
+                            value = "ex-complete"
+                          }
+                        ]
+                      }
+                    }
+                    return_data = true
+                  }
+                ]
+              }
+              predefined_load_metric_specification = {
+                predefined_metric_type = "ECSServiceTotalCPUUtilization"
+              }
+              # predefined_scaling_metric_specification = {
+              #   predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+              # }
+              # predefined_metric_pair_specification = {
+              #   predefined_metric_type = "ECSServiceMemoryUtilization"
+              # }
+            }]
+          }
+        }
+      }
+      # Container definition(s)
+      container_definitions = {
+        fluent-bit = {
+          cpu       = 512
+          memory    = 1024
+          essential = true
+          image     = nonsensitive(data.aws_ssm_parameter.fluentbit.value)
+          user      = "0"
+          firelensConfiguration = {
+            type = "fluentbit"
+          }
+          memoryReservation = 50
+
+          cloudwatch_log_group_retention_in_days = 30
+        }
+
+        (ecs-backend) = {
+          cpu       = 1024
+          memory    = 2048
+          essential = true
+          image     = "public.ecr.aws/aws-containers/ecsdemo-frontend:776fd50"
+          healthCheck = {
+            command = ["CMD-SHELL", "curl -f http://localhost:${local.container_port}/health || exit 1"]
+          }
+          ulimits = [
+            {
+              name      = "nofile"
+              softLimit = 65536
+              hardLimit = 65536
+            }
+          ]
+          portMappings = [
+            {
+              name          = "ecs-backend"
+              containerPort = 80
+              hostPort      = 80
+              protocol      = "tcp"
+            }
+          ]
+          capacity_provider_strategy = {
+            ASG = {
+              base              = 20
+              capacity_provider = "ASG"
+              weight            = 50
+            }
+          }
+          # Example image used requires access to write to root filesystem
+          readonlyRootFilesystem = false
+          dependsOn = [{
+            containerName = "fluent-bit"
+            condition     = "START"
+          }]
+          enable_cloudwatch_logging = false
+          logConfiguration = {
+            logDriver = "awsfirelens"
+            options = {
+              Name                    = "firehose"
+              region                  = local.region
+              delivery_stream         = "my-stream"
+              log-driver-buffer-limit = "2097152"
+            }
+          }
+          memoryReservation = 100
+          restartPolicy = {
+            enabled              = true
+            ignoredExitCodes     = [1]
+            restartAttemptPeriod = 60
+          }
+        }
+      }
+      load_balancer = {
+        service = {
+          target_group_arn = module.backend_lb.target_groups["backend_lb_target_group"].arn
+          container_name   = "ecs-backend"
+          container_port   = 80
+        }
+      }
+      tasks_iam_role_name        = "${local.name}-tasks"
+      tasks_iam_role_description = "Example tasks IAM role for ${local.name}"
+      tasks_iam_role_policies = {
+        ReadOnlyAccess = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+      }
+      tasks_iam_role_statements = [
+        {
+          actions   = ["s3:List*"]
+          resources = ["arn:aws:s3:::*"]
+        }
+      ]
+      subnet_ids                    = module.vpc.private_subnets
+      vpc_id                        = module.vpc.vpc_id
+      availability_zone_rebalancing = "ENABLED"
+      
+    }
+  }  
+}
+
 resource "aws_ecs_cluster" "ecs_cluster" {
   name = "texttosql-ecs-cluster"
   setting {
@@ -541,7 +828,7 @@ module "frontend_ecs" {
             "softLimit" : 65536,
             "hardLimit" : 65536
           }
-        ]
+        ],
         "portMappings" : [
           {
             "containerPort" : 3000,
@@ -769,7 +1056,7 @@ resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_ba
     type = "PINECONE"
     pinecone_configuration {
       connection_string      = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
-      credentials_secret_arn = "${module.pinecone_api_key.arn}"
+      credentials_secret_arn = module.pinecone_api_key.arn
       namespace              = "__default__"
       field_mapping {
         text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
