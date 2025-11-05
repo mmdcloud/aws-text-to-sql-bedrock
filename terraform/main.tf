@@ -346,9 +346,9 @@ module "db" {
   backup_retention_period         = 35
   backup_window                   = "03:00-06:00"
   subnet_group_ids = [
-    module.vpc.public_subnets[0],
-    module.vpc.public_subnets[1],
-    module.vpc.public_subnets[2]
+    module.vpc.private_subnets[0],
+    module.vpc.private_subnets[1],
+    module.vpc.private_subnets[2]
   ]
   vpc_security_group_ids                = [module.rds_security_group.id]
   publicly_accessible                   = false
@@ -386,8 +386,8 @@ module "frontend_lb" {
   subnets                    = module.vpc.public_subnets
   enable_deletion_protection = false
   drop_invalid_header_fields = true
-  ip_address_type         = "ipv4"
-  internal                = false
+  ip_address_type            = "ipv4"
+  internal                   = false
   security_groups = [
     aws_security_group.frontend_lb_sg.id
   ]
@@ -405,9 +405,9 @@ module "frontend_lb" {
   }
   target_groups = {
     frontend_lb_target_group = {
-      backend_protocol                  = "HTTP"
-      backend_port                      = 3000
-      target_type                       = "ip"
+      backend_protocol = "HTTP"
+      backend_port     = 3000
+      target_type      = "ip"
       health_check = {
         enabled             = true
         healthy_threshold   = 3
@@ -433,8 +433,8 @@ module "backend_lb" {
   subnets                    = module.vpc.public_subnets
   enable_deletion_protection = false
   drop_invalid_header_fields = true
-  ip_address_type         = "ipv4"
-  internal                = false
+  ip_address_type            = "ipv4"
+  internal                   = false
   security_groups = [
     aws_security_group.backend_lb_sg.id
   ]
@@ -452,9 +452,9 @@ module "backend_lb" {
   }
   target_groups = {
     backend_lb_target_group = {
-      backend_protocol                  = "HTTP"
-      backend_port                      = 80
-      target_type                       = "ip"
+      backend_protocol = "HTTP"
+      backend_port     = 80
+      target_type      = "ip"
       health_check = {
         enabled             = true
         healthy_threshold   = 3
@@ -501,55 +501,11 @@ module "ecs" {
       }
     }
   }
+  
   services = {
     ecs-frontend = {
       cpu    = 1024
-      memory = 4096
-      autoscaling_policies = {
-        predictive = {
-          policy_type = "PredictiveScaling"
-          predictive_scaling_policy_configuration = {
-            mode = "ForecastOnly"
-            metric_specification = [{
-              target_value = 60
-              customized_scaling_metric_specification = {
-                metric_data_query = [
-                  {
-                    id = "cpu_util"
-                    metric_stat = {
-                      stat = "Average"
-                      metric = {
-                        metric_name = "CPUUtilization"
-                        namespace   = "AWS/ECS"
-                        dimension = [
-                          {
-                            name  = "ServiceName"
-                            value = "ecsdemo-frontend"
-                          },
-                          {
-                            name  = "ClusterName"
-                            value = "ex-complete"
-                          }
-                        ]
-                      }
-                    }
-                    return_data = true
-                  }
-                ]
-              }
-              predefined_load_metric_specification = {
-                predefined_metric_type = "ECSServiceTotalCPUUtilization"
-              }
-              # predefined_scaling_metric_specification = {
-              #   predefined_metric_type = "ECSServiceAverageMemoryUtilization"
-              # }
-              # predefined_metric_pair_specification = {
-              #   predefined_metric_type = "ECSServiceMemoryUtilization"
-              # }
-            }]
-          }
-        }
-      }
+      memory = 4096      
       # Container definition(s)
       container_definitions = {
         fluent-bit = {
@@ -561,14 +517,21 @@ module "ecs" {
           firelensConfiguration = {
             type = "fluentbit"
           }
-          memoryReservation = 50
+          memoryReservation                      = 50
           cloudwatch_log_group_retention_in_days = 30
         }
+
         (ecs-frontend) = {
           cpu       = 1024
           memory    = 2048
           essential = true
-          image     = "public.ecr.aws/aws-containers/ecsdemo-frontend:776fd50"
+          image     = "${module.frontend_container_registry.repository_url}:latest"
+          placementStrategy = [
+            { 
+              type = "spread", 
+              field = "attribute:ecs.availability-zone" 
+            }
+          ]
           healthCheck = {
             command = ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"]
           }
@@ -587,6 +550,12 @@ module "ecs" {
               protocol      = "tcp"
             }
           ]
+          environment = [
+            {
+              name  = "BASE_URL"
+              value = "${module.backend_lb.dns_name}"
+            }
+          ]
           capacity_provider_strategy = {
             ASG = {
               base              = 20
@@ -605,8 +574,8 @@ module "ecs" {
             logDriver = "awsfirelens"
             options = {
               Name                    = "firehose"
-              region                  = local.region
-              delivery_stream         = "my-stream"
+              region                  = var.region
+              delivery_stream         = "ecs-frontend-stream"
               log-driver-buffer-limit = "2097152"
             }
           }
@@ -625,70 +594,14 @@ module "ecs" {
           container_port   = 3000
         }
       }
-      tasks_iam_role_name        = "${local.name}-tasks"
-      tasks_iam_role_description = "Example tasks IAM role for ${local.name}"
-      tasks_iam_role_policies = {
-        ReadOnlyAccess = "arn:aws:iam::aws:policy/ReadOnlyAccess"
-      }
-      tasks_iam_role_statements = [
-        {
-          actions   = ["s3:List*"]
-          resources = ["arn:aws:s3:::*"]
-        }
-      ]
       subnet_ids                    = module.vpc.private_subnets
       vpc_id                        = module.vpc.vpc_id
-      availability_zone_rebalancing = "ENABLED"      
+      availability_zone_rebalancing = "ENABLED"
     }
 
     ecs-backend = {
       cpu    = 1024
-      memory = 4096
-      autoscaling_policies = {
-        predictive = {
-          policy_type = "PredictiveScaling"
-          predictive_scaling_policy_configuration = {
-            mode = "ForecastOnly"
-            metric_specification = [{
-              target_value = 60
-              customized_scaling_metric_specification = {
-                metric_data_query = [
-                  {
-                    id = "cpu_util"
-                    metric_stat = {
-                      stat = "Average"
-                      metric = {
-                        metric_name = "CPUUtilization"
-                        namespace   = "AWS/ECS"
-                        dimension = [
-                          {
-                            name  = "ServiceName"
-                            value = "ecsdemo-frontend"
-                          },
-                          {
-                            name  = "ClusterName"
-                            value = "ex-complete"
-                          }
-                        ]
-                      }
-                    }
-                    return_data = true
-                  }
-                ]
-              }
-              predefined_load_metric_specification = {
-                predefined_metric_type = "ECSServiceTotalCPUUtilization"
-              }
-              # predefined_scaling_metric_specification = {
-              #   predefined_metric_type = "ECSServiceAverageMemoryUtilization"
-              # }
-              # predefined_metric_pair_specification = {
-              #   predefined_metric_type = "ECSServiceMemoryUtilization"
-              # }
-            }]
-          }
-        }
-      }
+      memory = 4096      
       # Container definition(s)
       container_definitions = {
         fluent-bit = {
@@ -701,23 +614,37 @@ module "ecs" {
             type = "fluentbit"
           }
           memoryReservation = 50
-
           cloudwatch_log_group_retention_in_days = 30
-        }
-
+        }        
         (ecs-backend) = {
           cpu       = 1024
           memory    = 2048
           essential = true
-          image     = "public.ecr.aws/aws-containers/ecsdemo-frontend:776fd50"
+          image     = "${module.backend_container_registry.repository_url}:latest"
+          placementStrategy = [
+            { 
+              type = "spread", 
+              field = "attribute:ecs.availability-zone" 
+            }
+          ]
           healthCheck = {
-            command = ["CMD-SHELL", "curl -f http://localhost:${local.container_port}/health || exit 1"]
+            command = ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
           }
           ulimits = [
             {
               name      = "nofile"
               softLimit = 65536
               hardLimit = 65536
+            }
+          ]
+          environment = [
+            {
+              name  = "DB_PATH"
+              value = "${tostring(split(":", module.db.endpoint)[0])}"
+            },
+            {
+              name  = "DB_NAME"
+              value = "${module.db.name}"
             }
           ]
           portMappings = [
@@ -735,19 +662,14 @@ module "ecs" {
               weight            = 50
             }
           }
-          # Example image used requires access to write to root filesystem
-          readonlyRootFilesystem = false
-          dependsOn = [{
-            containerName = "fluent-bit"
-            condition     = "START"
-          }]
+          readOnlyRootFilesystem = false
           enable_cloudwatch_logging = false
           logConfiguration = {
             logDriver = "awsfirelens"
             options = {
               Name                    = "firehose"
-              region                  = local.region
-              delivery_stream         = "my-stream"
+              region                  = var.region
+              delivery_stream         = "ecs-backend-stream"
               log-driver-buffer-limit = "2097152"
             }
           }
@@ -766,229 +688,11 @@ module "ecs" {
           container_port   = 80
         }
       }
-      tasks_iam_role_name        = "${local.name}-tasks"
-      tasks_iam_role_description = "Example tasks IAM role for ${local.name}"
-      tasks_iam_role_policies = {
-        ReadOnlyAccess = "arn:aws:iam::aws:policy/ReadOnlyAccess"
-      }
-      tasks_iam_role_statements = [
-        {
-          actions   = ["s3:List*"]
-          resources = ["arn:aws:s3:::*"]
-        }
-      ]
       subnet_ids                    = module.vpc.private_subnets
       vpc_id                        = module.vpc.vpc_id
       availability_zone_rebalancing = "ENABLED"
-      
     }
-  }  
-}
-
-resource "aws_ecs_cluster" "ecs_cluster" {
-  name = "texttosql-ecs-cluster"
-  setting {
-    name  = "containerInsights"
-    value = "enabled"
   }
-}
-
-module "frontend_ecs" {
-  source                                   = "./modules/ecs"
-  task_definition_family                   = "frontend-task-definition"
-  task_definition_requires_compatibilities = ["FARGATE"]
-  task_definition_cpu                      = 2048
-  task_definition_memory                   = 4096
-  task_definition_execution_role_arn       = module.ecs_task_execution_role.arn
-  task_definition_task_role_arn            = module.ecs_task_execution_role.arn
-  task_definition_network_mode             = "awsvpc"
-  task_definition_cpu_architecture         = "X86_64"
-  task_definition_operating_system_family  = "LINUX"
-  task_definition_container_definitions = jsonencode(
-    [
-      {
-        "name" : "frontend-td",
-        "image" : "${module.frontend_container_registry.repository_url}:latest",
-        "cpu" : 1024,
-        "memory" : 2048,
-        "placementStrategy" : [
-          { "type" : "spread", "field" : "attribute:ecs.availability-zone" }
-        ]
-        "essential" : true,
-        "healthCheck" : {
-          "command" : ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"],
-          "interval" : 30,
-          "timeout" : 5,
-          "retries" : 3,
-          "startPeriod" : 60
-        },
-        "ulimits" : [
-          {
-            "name" : "nofile",
-            "softLimit" : 65536,
-            "hardLimit" : 65536
-          }
-        ],
-        "portMappings" : [
-          {
-            "containerPort" : 3000,
-            "hostPort" : 3000,
-            "name" : "frontend-td"
-          }
-        ],
-        "logConfiguration" : {
-          "logDriver" : "awslogs",
-          "options" : {
-            "awslogs-group" : "${module.frontend_ecs_log_group.name}",
-            "awslogs-region" : "${var.region}",
-            "awslogs-stream-prefix" : "ecs"
-          }
-        },
-        environment = [
-          {
-            name  = "BASE_URL"
-            value = "${module.backend_lb.lb_dns_name}"
-          }
-        ]
-      },
-      {
-        "name" : "xray-daemon",
-        "image" : "amazon/aws-xray-daemon",
-        "cpu" : 32,
-        "memoryReservation" : 256,
-        "portMappings" : [
-          {
-            "containerPort" : 2000,
-            "protocol" : "udp"
-          }
-        ]
-      },
-  ])
-
-  service_name                = "frontend-ecs-service"
-  service_cluster             = aws_ecs_cluster.ecs_cluster.id
-  service_launch_type         = "FARGATE"
-  service_scheduling_strategy = "REPLICA"
-  service_desired_count       = 2
-  deployment_controller_type  = "ECS"
-  load_balancer_config = [{
-    container_name   = "frontend-td"
-    container_port   = 3000
-    target_group_arn = module.frontend_lb.target_groups[0].arn
-  }]
-  security_groups = [module.ecs_frontend_sg.id]
-  subnets = [
-    module.private_subnets.subnets[0].id,
-    module.private_subnets.subnets[1].id,
-    module.private_subnets.subnets[2].id
-  ]
-  assign_public_ip = false
-}
-
-module "backend_ecs" {
-  source                                   = "./modules/ecs"
-  task_definition_family                   = "backend-task-definition"
-  task_definition_requires_compatibilities = ["FARGATE"]
-  task_definition_cpu                      = 2048
-  task_definition_memory                   = 4096
-  task_definition_execution_role_arn       = module.ecs_task_execution_role.arn
-  task_definition_task_role_arn            = module.ecs_task_execution_role.arn
-  task_definition_network_mode             = "awsvpc"
-  task_definition_cpu_architecture         = "X86_64"
-  task_definition_operating_system_family  = "LINUX"
-  task_definition_container_definitions = jsonencode(
-    [
-      {
-        "name" : "backend-td",
-        "image" : "${module.backend_container_registry.repository_url}:latest",
-        "cpu" : 1024,
-        "memory" : 2048,
-        "placementStrategy" : [
-          { "type" : "spread", "field" : "attribute:ecs.availability-zone" }
-        ]
-        "essential" : true,
-        "secrets" : [
-          {
-            "name" : "UN",
-            "valueFrom" : "${module.db_credentials.arn}:username::"
-          },
-          {
-            "name" : "CREDS",
-            "valueFrom" : "${module.db_credentials.arn}:password::"
-          }
-        ],
-        "healthCheck" : {
-          "command" : ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"],
-          "interval" : 30,
-          "timeout" : 5,
-          "retries" : 3,
-          "startPeriod" : 60
-        },
-        "ulimits" : [
-          {
-            "name" : "nofile",
-            "softLimit" : 65536,
-            "hardLimit" : 65536
-          }
-        ]
-        "portMappings" : [
-          {
-            "containerPort" : 80,
-            "hostPort" : 80,
-            "name" : "backend-td"
-          }
-        ],
-        "logConfiguration" : {
-          "logDriver" : "awslogs",
-          "options" : {
-            "awslogs-group" : "${module.backend_ecs_log_group.name}",
-            "awslogs-region" : "${var.region}",
-            "awslogs-stream-prefix" : "ecs"
-          }
-        },
-        environment = [
-          {
-            name  = "DB_PATH"
-            value = "${tostring(split(":", module.db.endpoint)[0])}"
-          },
-          {
-            name  = "DB_NAME"
-            value = "${module.db.name}"
-          }
-        ]
-      },
-      {
-        "name" : "xray-daemon",
-        "image" : "amazon/aws-xray-daemon",
-        "cpu" : 32,
-        "memoryReservation" : 256,
-        "portMappings" : [
-          {
-            "containerPort" : 2000,
-            "protocol" : "udp"
-          }
-        ]
-      }
-  ])
-
-  service_name                = "backend-ecs-service"
-  service_cluster             = aws_ecs_cluster.ecs_cluster.id
-  service_launch_type         = "FARGATE"
-  service_scheduling_strategy = "REPLICA"
-  service_desired_count       = 2
-  deployment_controller_type  = "ECS"
-  load_balancer_config = [{
-    container_name   = "backend-td"
-    container_port   = 80
-    target_group_arn = module.backend_lb.target_groups[0].arn
-  }]
-  security_groups = [module.ecs_backend_sg.id]
-  subnets = [
-    module.private_subnets.subnets[0].id,
-    module.private_subnets.subnets[1].id,
-    module.private_subnets.subnets[2].id
-  ]
-  assign_public_ip = false
 }
 
 # ---------------------------------------------------------------------
