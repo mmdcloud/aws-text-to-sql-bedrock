@@ -4,6 +4,14 @@ data "aws_partition" "current" {}
 
 data "aws_region" "current" {}
 
+data "aws_ssm_parameter" "ecs_optimized_ami" {
+  name = "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended"
+}
+
+data "aws_ssm_parameter" "fluentbit" {
+  name = "/aws/service/aws-for-fluent-bit/stable"
+}
+
 # ---------------------------------------------------------------------
 # Registering vault provider
 # ---------------------------------------------------------------------
@@ -350,7 +358,7 @@ module "db" {
     module.vpc.private_subnets[1],
     module.vpc.private_subnets[2]
   ]
-  vpc_security_group_ids                = [module.rds_security_group.id]
+  vpc_security_group_ids                = [module.rds_sg.id]
   publicly_accessible                   = false
   deletion_protection                   = false
   skip_final_snapshot                   = true
@@ -501,11 +509,11 @@ module "ecs" {
       }
     }
   }
-  
+
   services = {
     ecs-frontend = {
       cpu    = 1024
-      memory = 4096      
+      memory = 4096
       # Container definition(s)
       container_definitions = {
         fluent-bit = {
@@ -527,9 +535,9 @@ module "ecs" {
           essential = true
           image     = "${module.frontend_container_registry.repository_url}:latest"
           placementStrategy = [
-            { 
-              type = "spread", 
-              field = "attribute:ecs.availability-zone" 
+            {
+              type  = "spread",
+              field = "attribute:ecs.availability-zone"
             }
           ]
           healthCheck = {
@@ -601,7 +609,7 @@ module "ecs" {
 
     ecs-backend = {
       cpu    = 1024
-      memory = 4096      
+      memory = 4096
       # Container definition(s)
       container_definitions = {
         fluent-bit = {
@@ -613,18 +621,18 @@ module "ecs" {
           firelensConfiguration = {
             type = "fluentbit"
           }
-          memoryReservation = 50
+          memoryReservation                      = 50
           cloudwatch_log_group_retention_in_days = 30
-        }        
+        }
         (ecs-backend) = {
           cpu       = 1024
           memory    = 2048
           essential = true
           image     = "${module.backend_container_registry.repository_url}:latest"
           placementStrategy = [
-            { 
-              type = "spread", 
-              field = "attribute:ecs.availability-zone" 
+            {
+              type  = "spread",
+              field = "attribute:ecs.availability-zone"
             }
           ]
           healthCheck = {
@@ -662,7 +670,7 @@ module "ecs" {
               weight            = 50
             }
           }
-          readOnlyRootFilesystem = false
+          readOnlyRootFilesystem    = false
           enable_cloudwatch_logging = false
           logConfiguration = {
             logDriver = "awsfirelens"
@@ -744,6 +752,7 @@ resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
   foundation_model            = "anthropic.claude-v4"
   guardrail_configuration = [{
     guardrail_identifier = "${aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_id}"
+    guardrail_version = "${aws_bedrock_guardrail_version.guardrail_version.version}"
   }]
 }
 
@@ -848,4 +857,10 @@ resource "aws_bedrock_guardrail" "texttosql_bedrock_agent_guardrail" {
       text = "HATE"
     }
   }
+}
+
+resource "aws_bedrock_guardrail_version" "guardrail_version" {
+  description   = "example"
+  guardrail_arn = aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_arn
+  skip_destroy  = true
 }
