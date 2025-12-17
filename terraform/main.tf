@@ -45,137 +45,147 @@ module "vpc" {
   }
 }
 
-resource "aws_security_group" "frontend_lb_sg" {
+module "frontend_lb_sg" {
+  source = "./modules/security-groups"
   name   = "frontend-lb-sg"
   vpc_id = module.vpc.vpc_id
-
-  ingress {
-    description = "HTTP traffic"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS traffic"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  ingress_rules = [
+    {
+      description = "HTTP Traffic"
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    },
+    {
+      description = "HTTPS Traffic"
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
     Name = "frontend-lb-sg"
   }
 }
 
-resource "aws_security_group" "backend_lb_sg" {
+module "backend_lb_sg" {
+  source = "./modules/security-groups"
   name   = "backend-lb-sg"
   vpc_id = module.vpc.vpc_id
-
-  ingress {
-    description = "HTTP traffic"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS traffic"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  ingress_rules = [
+    {
+      description = "HTTP Traffic"
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    },
+    {
+      description = "HTTPS Traffic"
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
     Name = "backend-lb-sg"
   }
 }
 
-resource "aws_security_group" "ecs_frontend_sg" {
+module "ecs_frontend_sg" {
+  source = "./modules/security-groups"
   name   = "ecs-frontend-sg"
   vpc_id = module.vpc.vpc_id
-
-  ingress {
-    from_port       = 3000
-    to_port         = 3000
-    protocol        = "tcp"
-    cidr_blocks     = []
-    security_groups = [aws_security_group.frontend_lb_sg.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  ingress_rules = [
+    {
+      from_port   = 3000
+      to_port     = 3000
+      protocol    = "tcp"
+      cidr_blocks = [module.frontend_lb_sg.id]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
-    Name = "ecs-frontend-sg"
+    Name = "ecs-frontend"
   }
 }
 
-resource "aws_security_group" "ecs_backend_sg" {
+module "ecs_backend_sg" {
+  source = "./modules/security-groups"
   name   = "ecs-backend-sg"
   vpc_id = module.vpc.vpc_id
-
-  ingress {
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    cidr_blocks     = []
-    security_groups = [aws_security_group.backend_lb_sg.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  ingress_rules = [
+    {
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      cidr_blocks = [module.backend_lb_sg.id]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
     Name = "ecs-backend-sg"
   }
 }
 
-resource "aws_security_group" "rds_sg" {
+module "rds_sg" {
+  source = "./modules/security-groups"
   name   = "rds-sg"
   vpc_id = module.vpc.vpc_id
-
-  ingress {
-    from_port       = 3306
-    to_port         = 3306
-    protocol        = "tcp"
-    cidr_blocks     = []
-    security_groups = [aws_security_group.ecs_backend_sg.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  ingress_rules = [
+    {
+      from_port   = 3306
+      to_port     = 3306
+      protocol    = "tcp"
+      cidr_blocks = [module.ecs_backend_sg.id]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
     Name = "rds-sg"
   }
@@ -397,7 +407,7 @@ module "frontend_lb" {
   ip_address_type            = "ipv4"
   internal                   = false
   security_groups = [
-    aws_security_group.frontend_lb_sg.id
+    module.frontend_lb_sg.id
   ]
   access_logs = {
     bucket = "${module.frontend_lb_logs.bucket}"
@@ -444,7 +454,7 @@ module "backend_lb" {
   ip_address_type            = "ipv4"
   internal                   = false
   security_groups = [
-    aws_security_group.backend_lb_sg.id
+    module.backend_lb_sg.id
   ]
   access_logs = {
     bucket = "${module.backend_lb_logs.bucket}"
@@ -511,7 +521,7 @@ module "ecs" {
   }
 
   services = {
-    ecs-frontend = {
+    ecs_frontend = {
       cpu    = 1024
       memory = 4096
       # Container definition(s)
@@ -529,7 +539,7 @@ module "ecs" {
           cloudwatch_log_group_retention_in_days = 30
         }
 
-        (ecs-frontend) = {
+        ecs_frontend = {
           cpu       = 1024
           memory    = 2048
           essential = true
@@ -607,7 +617,7 @@ module "ecs" {
       availability_zone_rebalancing = "ENABLED"
     }
 
-    ecs-backend = {
+    ecs_backend = {
       cpu    = 1024
       memory = 4096
       # Container definition(s)
@@ -624,7 +634,7 @@ module "ecs" {
           memoryReservation                      = 50
           cloudwatch_log_group_retention_in_days = 30
         }
-        (ecs-backend) = {
+        ecs_backend = {
           cpu       = 1024
           memory    = 2048
           essential = true
@@ -752,7 +762,7 @@ resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
   foundation_model            = "anthropic.claude-v4"
   guardrail_configuration = [{
     guardrail_identifier = "${aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_id}"
-    guardrail_version = "${aws_bedrock_guardrail_version.guardrail_version.version}"
+    guardrail_version    = "${aws_bedrock_guardrail_version.guardrail_version.version}"
   }]
 }
 
