@@ -8,10 +8,6 @@ data "aws_ssm_parameter" "ecs_optimized_ami" {
   name = "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended"
 }
 
-data "aws_ssm_parameter" "fluentbit" {
-  name = "/aws/service/aws-for-fluent-bit/stable"
-}
-
 # ---------------------------------------------------------------------
 # Registering vault provider
 # ---------------------------------------------------------------------
@@ -33,6 +29,7 @@ module "vpc" {
   azs                     = var.azs
   public_subnets          = var.public_subnets
   private_subnets         = var.private_subnets
+  database_subnets        = var.database_subnets
   enable_dns_hostnames    = true
   enable_dns_support      = true
   create_igw              = true
@@ -364,9 +361,9 @@ module "db" {
   backup_retention_period         = 35
   backup_window                   = "03:00-06:00"
   subnet_group_ids = [
-    module.vpc.private_subnets[0],
-    module.vpc.private_subnets[1],
-    module.vpc.private_subnets[2]
+    module.vpc.database_subnets[0],
+    module.vpc.database_subnets[1],
+    module.vpc.database_subnets[2]
   ]
   vpc_security_group_ids                = [module.rds_sg.id]
   publicly_accessible                   = false
@@ -526,19 +523,6 @@ module "ecs" {
       memory = 4096
       # Container definition(s)
       container_definitions = {
-        fluent-bit = {
-          cpu       = 512
-          memory    = 1024
-          essential = true
-          image     = nonsensitive(data.aws_ssm_parameter.fluentbit.value)
-          user      = "0"
-          firelensConfiguration = {
-            type = "fluentbit"
-          }
-          memoryReservation                      = 50
-          cloudwatch_log_group_retention_in_days = 30
-        }
-
         ecs_frontend = {
           cpu       = 1024
           memory    = 2048
@@ -582,11 +566,7 @@ module "ecs" {
             }
           }
           # Example image used requires access to write to root filesystem
-          readonlyRootFilesystem = false
-          dependsOn = [{
-            containerName = "fluent-bit"
-            condition     = "START"
-          }]
+          readonlyRootFilesystem    = false
           enable_cloudwatch_logging = false
           logConfiguration = {
             logDriver = "awsfirelens"
@@ -623,18 +603,6 @@ module "ecs" {
       memory = 4096
       # Container definition(s)
       container_definitions = {
-        fluent-bit = {
-          cpu       = 512
-          memory    = 1024
-          essential = true
-          image     = nonsensitive(data.aws_ssm_parameter.fluentbit.value)
-          user      = "0"
-          firelensConfiguration = {
-            type = "fluentbit"
-          }
-          memoryReservation                      = 50
-          cloudwatch_log_group_retention_in_days = 30
-        }
         ecs_backend = {
           cpu       = 1024
           memory    = 2048
