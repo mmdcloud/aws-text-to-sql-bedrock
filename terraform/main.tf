@@ -490,6 +490,18 @@ module "backend_lb" {
 # ---------------------------------------------------------------------
 # ECS configuration
 # ---------------------------------------------------------------------
+module "frontend_ecs_log_group" {
+  source            = "./modules/cloudwatch/cloudwatch-log-group"
+  log_group_name    = "/aws/ecs/frontend-ecs"
+  retention_in_days = 90
+}
+
+module "backend_ecs_log_group" {
+  source            = "./modules/cloudwatch/cloudwatch-log-group"
+  log_group_name    = "/aws/ecs/backend-ecs"
+  retention_in_days = 90
+}
+
 module "ecs" {
   source       = "terraform-aws-modules/ecs/aws"
   cluster_name = "text-to-sql-cluster"
@@ -521,7 +533,6 @@ module "ecs" {
     ecs_frontend = {
       cpu    = 1024
       memory = 4096
-      # Container definition(s)
       container_definitions = {
         ecs_frontend = {
           cpu       = 1024
@@ -565,16 +576,13 @@ module "ecs" {
               weight            = 50
             }
           }
-          # Example image used requires access to write to root filesystem
           readonlyRootFilesystem    = false
           enable_cloudwatch_logging = false
           logConfiguration = {
-            logDriver = "awsfirelens"
+            logDriver = "awslogs"
             options = {
-              Name                    = "firehose"
-              region                  = var.region
-              delivery_stream         = "ecs-frontend-stream"
-              log-driver-buffer-limit = "2097152"
+              awslogs-group         = module.backend_ecs_log_group.name
+              awslogs-region        = var.region
             }
           }
           memoryReservation = 100
@@ -601,7 +609,6 @@ module "ecs" {
     ecs_backend = {
       cpu    = 1024
       memory = 4096
-      # Container definition(s)
       container_definitions = {
         ecs_backend = {
           cpu       = 1024
@@ -652,12 +659,10 @@ module "ecs" {
           readOnlyRootFilesystem    = false
           enable_cloudwatch_logging = false
           logConfiguration = {
-            logDriver = "awsfirelens"
+            logDriver = "awslogs"
             options = {
-              Name                    = "firehose"
-              region                  = var.region
-              delivery_stream         = "ecs-backend-stream"
-              log-driver-buffer-limit = "2097152"
+              awslogs-group         = module.backend_ecs_log_group.name
+              awslogs-region        = var.region
             }
           }
           memoryReservation = 100
