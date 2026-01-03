@@ -6,6 +6,7 @@ variable "publicly_accessible" {}
 variable "multi_az" {}
 variable "instance_class" {}
 variable "username" {}
+variable maintenance_window{}
 variable "password" {}
 variable "parameter_group_name" {}
 variable "parameter_group_family" {}

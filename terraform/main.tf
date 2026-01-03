@@ -35,8 +35,8 @@ module "vpc" {
   create_igw              = true
   map_public_ip_on_launch = true
   enable_nat_gateway      = true
-  single_nat_gateway      = true
-  one_nat_gateway_per_az  = false
+  single_nat_gateway      = false
+  one_nat_gateway_per_az  = true
   tags = {
     Project = "text-to-sql"
   }
@@ -48,18 +48,20 @@ module "frontend_lb_sg" {
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      description = "HTTP Traffic"
-      from_port   = 80
-      to_port     = 80
-      protocol    = "tcp"
-      cidr_blocks = ["0.0.0.0/0"]
+      description     = "HTTP Traffic"
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      cidr_blocks     = ["0.0.0.0/0"]
+      security_groups = []
     },
     {
-      description = "HTTPS Traffic"
-      from_port   = 443
-      to_port     = 443
-      protocol    = "tcp"
-      cidr_blocks = ["0.0.0.0/0"]
+      description     = "HTTPS Traffic"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      cidr_blocks     = ["0.0.0.0/0"]
+      security_groups = []
     }
   ]
   egress_rules = [
@@ -82,18 +84,20 @@ module "backend_lb_sg" {
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      description = "HTTP Traffic"
-      from_port   = 80
-      to_port     = 80
-      protocol    = "tcp"
-      cidr_blocks = ["0.0.0.0/0"]
+      description     = "HTTP Traffic"
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      cidr_blocks     = []
+      security_groups = [module.ecs_frontend_sg.sg]
     },
     {
-      description = "HTTPS Traffic"
-      from_port   = 443
-      to_port     = 443
-      protocol    = "tcp"
-      cidr_blocks = ["0.0.0.0/0"]
+      description     = "HTTPS Traffic"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      cidr_blocks     = []
+      security_groups = [module.ecs_frontend_sg.sg]
     }
   ]
   egress_rules = [
@@ -116,10 +120,11 @@ module "ecs_frontend_sg" {
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      from_port   = 3000
-      to_port     = 3000
-      protocol    = "tcp"
-      cidr_blocks = [module.frontend_lb_sg.id]
+      from_port       = 3000
+      to_port         = 3000
+      protocol        = "tcp"
+      cidr_blocks     = []
+      security_groups = [module.frontend_lb_sg.id]
     }
   ]
   egress_rules = [
@@ -132,7 +137,7 @@ module "ecs_frontend_sg" {
     }
   ]
   tags = {
-    Name = "ecs-frontend"
+    Name = "ecs-frontend-sg"
   }
 }
 
@@ -142,10 +147,11 @@ module "ecs_backend_sg" {
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      from_port   = 80
-      to_port     = 80
-      protocol    = "tcp"
-      cidr_blocks = [module.backend_lb_sg.id]
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      cidr_blocks     = []
+      security_groups = [module.backend_lb_sg.id]
     }
   ]
   egress_rules = [
@@ -168,10 +174,11 @@ module "rds_sg" {
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      from_port   = 3306
-      to_port     = 3306
-      protocol    = "tcp"
-      cidr_blocks = [module.ecs_backend_sg.id]
+      from_port       = 3306
+      to_port         = 3306
+      protocol        = "tcp"
+      cidr_blocks     = []
+      security_groups = [module.ecs_backend_sg.id]
     }
   ]
   egress_rules = [
@@ -359,7 +366,8 @@ module "db" {
   subnet_group_name               = "rds_subnet_group"
   enabled_cloudwatch_logs_exports = ["audit", "error", "general", "slowquery"]
   backup_retention_period         = 35
-  backup_window                   = "03:00-06:00"
+  backup_window                   = "03:00-04:00" # 1 hour backup
+  maintenance_window              = "Mon:04:30-Mon:05:30"
   subnet_group_ids = [
     module.vpc.database_subnets[0],
     module.vpc.database_subnets[1],
@@ -445,11 +453,11 @@ module "backend_lb" {
   name                       = "backend-lb"
   load_balancer_type         = "application"
   vpc_id                     = module.vpc.vpc_id
-  subnets                    = module.vpc.public_subnets
+  subnets                    = module.vpc.private_subnets
   enable_deletion_protection = false
   drop_invalid_header_fields = true
   ip_address_type            = "ipv4"
-  internal                   = false
+  internal                   = true
   security_groups = [
     module.backend_lb_sg.id
   ]
@@ -490,6 +498,68 @@ module "backend_lb" {
 # ---------------------------------------------------------------------
 # ECS configuration
 # ---------------------------------------------------------------------
+module "ecs_task_execution_role" {
+  source             = "../../../modules/iam"
+  role_name          = "ecs-task-execution-role"
+  role_description   = "IAM role for ECS task execution"
+  policy_name        = "ecs-task-execution-policy"
+  policy_description = "IAM policy for ECS task execution"
+  assume_role_policy = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": "sts:AssumeRole",
+                "Principal": {
+                  "Service": "ecs-tasks.amazonaws.com"
+                },
+                "Effect": "Allow",
+                "Sid": ""
+            }
+        ]
+    }
+    EOF
+  policy             = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": [
+                  "s3:PutObject"
+                ],
+                "Resource": "*",
+                "Effect": "Allow"
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret"
+              ],
+              "Resource": [
+                "${module.db_credentials.arn}",
+                "${module.pinecone_api_key.arn}"
+              ]
+            },
+            {
+                "Action": [
+                  "bedrock:InvokeAgent",
+                  "bedrock:InvokeModel"
+                ],
+                "Resource": "*",
+                "Effect": "Allow"
+            },
+        ]
+    }
+    EOF
+}
+
+# ECR-ECS policy attachment 
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy_attachment" {
+  role       = module.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
 module "frontend_ecs_log_group" {
   source            = "./modules/cloudwatch/cloudwatch-log-group"
   log_group_name    = "/aws/ecs/frontend-ecs"
@@ -507,34 +577,31 @@ module "ecs" {
   cluster_name = "text-to-sql-cluster"
   default_capacity_provider_strategy = {
     FARGATE = {
-      weight = 50
-      base   = 20
-    }
-    FARGATE_SPOT = {
-      weight = 50
+      weight = 100
+      base   = 1
     }
   }
-  autoscaling_capacity_providers = {
-    ASG = {
-      auto_scaling_group_arn         = module.autoscaling.autoscaling_group_arn
-      managed_draining               = "ENABLED"
-      managed_termination_protection = "ENABLED"
-
-      managed_scaling = {
-        maximum_scaling_step_size = 5
-        minimum_scaling_step_size = 1
-        status                    = "ENABLED"
-        target_capacity           = 60
-      }
-    }
-  }
-
   services = {
-    ecs_frontend = {
-      cpu    = 1024
-      memory = 4096
+    ecs-frontend = {
+      cpu                    = 2048
+      memory                 = 4096
+      task_exec_iam_role_arn = module.ecs_task_execution_role.arn
+      iam_role_arn           = module.ecs_task_execution_role.arn
+      desired_count          = 2
+      assign_public_ip       = false
+      deployment_controller = {
+        type = "ECS"
+      }
+      network_mode = "awsvpc"
+      runtime_platform = {
+        cpu_architecture        = "X86_64"
+        operating_system_family = "LINUX"
+      }
+      launch_type              = "FARGATE"
+      scheduling_strategy      = "REPLICA"
+      requires_compatibilities = ["FARGATE"]
       container_definitions = {
-        ecs_frontend = {
+        ecs-frontend = {
           cpu       = 1024
           memory    = 2048
           essential = true
@@ -581,8 +648,9 @@ module "ecs" {
           logConfiguration = {
             logDriver = "awslogs"
             options = {
-              awslogs-group         = module.backend_ecs_log_group.name
+              awslogs-group         = module.frontend_ecs_log_group.name
               awslogs-region        = var.region
+              awslogs-stream-prefix = "frontend"
             }
           }
           memoryReservation = 100
@@ -606,21 +674,30 @@ module "ecs" {
       availability_zone_rebalancing = "ENABLED"
     }
 
-    ecs_backend = {
-      cpu    = 1024
-      memory = 4096
+    ecs-backend = {
+      cpu                    = 2048
+      memory                 = 4096
+      task_exec_iam_role_arn = module.ecs_task_execution_role.arn
+      iam_role_arn           = module.ecs_task_execution_role.arn
+      desired_count          = 2
+      assign_public_ip       = false
+      deployment_controller = {
+        type = "ECS"
+      }
+      network_mode = "awsvpc"
+      runtime_platform = {
+        cpu_architecture        = "X86_64"
+        operating_system_family = "LINUX"
+      }
+      launch_type              = "FARGATE"
+      scheduling_strategy      = "REPLICA"
+      requires_compatibilities = ["FARGATE"]
       container_definitions = {
-        ecs_backend = {
+        ecs-backend = {
           cpu       = 1024
           memory    = 2048
           essential = true
           image     = "${module.backend_container_registry.repository_url}:latest"
-          placementStrategy = [
-            {
-              type  = "spread",
-              field = "attribute:ecs.availability-zone"
-            }
-          ]
           healthCheck = {
             command = ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
           }
@@ -649,13 +726,6 @@ module "ecs" {
               protocol      = "tcp"
             }
           ]
-          capacity_provider_strategy = {
-            ASG = {
-              base              = 20
-              capacity_provider = "ASG"
-              weight            = 50
-            }
-          }
           readOnlyRootFilesystem    = false
           enable_cloudwatch_logging = false
           logConfiguration = {
@@ -663,6 +733,7 @@ module "ecs" {
             options = {
               awslogs-group         = module.backend_ecs_log_group.name
               awslogs-region        = var.region
+              awslogs-stream-prefix = "backend"
             }
           }
           memoryReservation = 100
@@ -686,6 +757,70 @@ module "ecs" {
       availability_zone_rebalancing = "ENABLED"
     }
   }
+}
+
+module "frontend_app_autoscaling_policy" {
+  source             = "./modules/autoscaling"
+  min_capacity       = 2
+  max_capacity       = 10
+  resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs-frontend"].name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+  policies = [
+    {
+      name        = "worker-scale-up"
+      policy_type = "TargetTrackingScaling"
+      step_scaling_policy_configuration = {
+        adjustment_type          = "ChangeInCapacity"
+        cooldown                 = 60
+        metric_aggregation_type  = "Average"
+        min_adjustment_magnitude = 1
+        step_adjustment = [
+          {
+            metric_interval_lower_bound = 0
+            metric_interval_upper_bound = 20
+            scaling_adjustment          = 1
+          },
+          {
+            metric_interval_lower_bound = 20
+            scaling_adjustment          = 2
+          }
+        ]
+      }
+    }
+  ]
+}
+
+module "backend_app_autoscaling_policy" {
+  source             = "./modules/autoscaling"
+  min_capacity       = 2
+  max_capacity       = 10
+  resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs-backend"].name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+  policies = [
+    {
+      name        = "worker-scale-up"
+      policy_type = "TargetTrackingScaling"
+      step_scaling_policy_configuration = {
+        adjustment_type          = "ChangeInCapacity"
+        cooldown                 = 60
+        metric_aggregation_type  = "Average"
+        min_adjustment_magnitude = 1
+        step_adjustment = [
+          {
+            metric_interval_lower_bound = 0
+            metric_interval_upper_bound = 20
+            scaling_adjustment          = 1
+          },
+          {
+            metric_interval_lower_bound = 20
+            scaling_adjustment          = 2
+          }
+        ]
+      }
+    }
+  ]
 }
 
 # ---------------------------------------------------------------------
@@ -715,7 +850,7 @@ data "aws_iam_policy_document" "texttosql_bedrock_agent_permissions" {
   statement {
     actions = ["bedrock:InvokeModel"]
     resources = [
-      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/anthropic.claude-v2",
+      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
     ]
   }
 }
@@ -730,122 +865,311 @@ resource "aws_iam_role_policy" "texttosql_bedrock_agent_role_policy" {
   role   = aws_iam_role.texttosql_bedrock_agent_role.id
 }
 
-resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
-  agent_name                  = "texttosql-bedrock-agent"
+module "bedrock_agent" {
+  source = "./modules/bedrock/agent"
+
+  agent_name                  = "texttosql-agent"
+  description                 = "AI agent for text-to-SQL conversion"
+  foundation_model            = "anthropic.claude-opus-4-5-20251101-v1:0"
   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
   idle_session_ttl_in_seconds = 500
-  foundation_model            = "anthropic.claude-v4"
-  guardrail_configuration = [{
-    guardrail_identifier = "${aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_id}"
-    guardrail_version    = "${aws_bedrock_guardrail_version.guardrail_version.version}"
-  }]
-}
 
-resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_base" {
-  name     = "texttosql-bedrock-agent-knowledge-base"
-  role_arn = aws_iam_role.texttosql_bedrock_agent_role.arn
-  knowledge_base_configuration {
-    vector_knowledge_base_configuration {
-      embedding_model_arn = "arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0"
-    }
-    type = "VECTOR"
-  }
-  storage_configuration {
-    type = "PINECONE"
-    pinecone_configuration {
-      connection_string      = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
-      credentials_secret_arn = module.pinecone_api_key.arn
-      namespace              = "__default__"
-      field_mapping {
-        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
-        metadata_field = "AMAZON_BEDROCK_METADATA"
-      }
-    }
-  }
-}
+  # Instruction
+  instruction = <<-EOT
+    You are a helpful assistant that converts natural language queries into SQL statements.
+    You have access to a knowledge base containing database schemas and documentation.
+    Always validate that the generated SQL is safe and follows best practices.
+  EOT
 
-resource "aws_bedrockagent_data_source" "texttosql_bedrock_agent_data_source" {
-  knowledge_base_id = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
-  name              = "texttosql-bedrock-agent-data-source"
-  description       = "TextToSQL Bedrock Agent Data Source"
-  data_source_configuration {
-    type = "S3"
-    s3_configuration {
-      bucket_arn = module.bedrock_knowledge_base_data_source.arn
+  # Guardrail Configuration
+  guardrail_identifier = module.bedrock_guardrail.guardrail_id
+  guardrail_version    = module.bedrock_guardrail.guardrail_version
+
+  # Knowledge Base Association
+  knowledge_bases = [
+    {
+      knowledge_base_id    = module.bedrock_knowledge_base.knowledge_base_id
+      description          = "Database schema and documentation"
+      knowledge_base_state = "ENABLED"
     }
+  ]
+
+  # Action Groups (optional)
+  action_groups = []
+
+  # Prompt Override Configuration (optional)
+  prompt_override_configuration = {
+    prompt_configurations = []
+  }
+
+  tags = {
+    Project   = "text-to-sql"
+    ManagedBy = "Terraform"
   }
 }
 
-resource "aws_bedrockagent_agent_knowledge_base_association" "texttosql_bedrock_agent_knowledge_base_association" {
-  agent_id             = aws_bedrockagent_agent.texttosql_bedrock_agent.agent_id
-  description          = "texttosql-bedrock-agent-knowledge-base-association"
-  knowledge_base_id    = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
-  knowledge_base_state = "ENABLED"
+module "bedrock_knowledge_base" {
+  source = "./modules/bedrock/knowledge-base"
+
+  name        = "texttosql-knowledge-base"
+  description = "Knowledge base for TextToSQL application"
+  role_arn    = aws_iam_role.texttosql_bedrock_agent_role.arn
+
+  # Vector Configuration
+  embedding_model_arn = "arn:aws:bedrock:${var.region}::foundation-model/amazon.titan-embed-text-v2:0"
+
+  # Storage Configuration
+  storage_type = "PINECONE"
+
+  pinecone_config = {
+    connection_string      = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
+    credentials_secret_arn = module.pinecone_api_key.arn
+    namespace              = "__default__"
+    text_field             = "AMAZON_BEDROCK_TEXT_CHUNK"
+    metadata_field         = "AMAZON_BEDROCK_METADATA"
+  }
+
+  # Data Source Configuration
+  data_sources = [
+    {
+      name               = "s3-documentation"
+      description        = "S3 bucket containing documentation"
+      type               = "S3"
+      bucket_arn         = module.bedrock_knowledge_base_data_source.arn
+      inclusion_prefixes = []
+      exclusion_prefixes = []
+    }
+  ]
+
+  tags = {
+    Project   = "text-to-sql"
+    ManagedBy = "Terraform"
+  }
 }
 
-resource "aws_bedrock_guardrail" "texttosql_bedrock_agent_guardrail" {
-  name                      = "example"
-  blocked_input_messaging   = "example"
-  blocked_outputs_messaging = "example"
-  description               = "example"
+module "bedrock_guardrail" {
+  source = "./modules/bedrock/guardrail"
 
-  content_policy_config {
-    filters_config {
+  name                      = "texttosql-guardrail"
+  description               = "Guardrail for TextToSQL Bedrock Agent"
+  blocked_input_messaging   = "Your input was blocked due to content policy violations."
+  blocked_outputs_messaging = "The output was blocked due to content policy violations."
+
+  # Content Policy
+  content_filters = [
+    {
+      type            = "HATE"
       input_strength  = "MEDIUM"
       output_strength = "MEDIUM"
-      type            = "HATE"
+    },
+    {
+      type            = "VIOLENCE"
+      input_strength  = "MEDIUM"
+      output_strength = "MEDIUM"
+    },
+    {
+      type            = "SEXUAL"
+      input_strength  = "HIGH"
+      output_strength = "HIGH"
     }
-    tier_config {
-      tier_name = "STANDARD"
-    }
-  }
+  ]
 
-  sensitive_information_policy_config {
-    pii_entities_config {
+  content_tier = "STANDARD"
+
+  # PII Configuration
+  pii_entities = [
+    {
+      type           = "NAME"
       action         = "BLOCK"
       input_action   = "BLOCK"
       output_action  = "ANONYMIZE"
       input_enabled  = true
       output_enabled = true
-      type           = "NAME"
+    },
+    {
+      type           = "EMAIL"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "ANONYMIZE"
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      type           = "PHONE"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "ANONYMIZE"
+      input_enabled  = true
+      output_enabled = true
     }
+  ]
 
-    regexes_config {
+  # Regex Patterns
+  regex_patterns = [
+    {
+      name           = "ssn_pattern"
+      description    = "Detects US Social Security Numbers"
+      pattern        = "^\\d{3}-\\d{2}-\\d{4}$"
       action         = "BLOCK"
       input_action   = "BLOCK"
       output_action  = "BLOCK"
       input_enabled  = true
-      output_enabled = false
-      description    = "example regex"
-      name           = "regex_example"
-      pattern        = "^\\d{3}-\\d{2}-\\d{4}$"
+      output_enabled = true
+    },
+    {
+      name           = "credit_card_pattern"
+      description    = "Detects credit card numbers"
+      pattern        = "^\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}$"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "ANONYMIZE"
+      input_enabled  = true
+      output_enabled = true
     }
-  }
+  ]
 
-  topic_policy_config {
-    topics_config {
-      name       = "investment_topic"
-      examples   = ["Where should I invest my money ?"]
-      type       = "DENY"
-      definition = "Investment advice refers to inquiries, guidance, or recommendations regarding the management or allocation of funds or assets with the goal of generating returns ."
+  # Topic Policy
+  denied_topics = [
+    {
+      name       = "investment_advice"
+      definition = "Investment advice refers to inquiries, guidance, or recommendations regarding the management or allocation of funds or assets with the goal of generating returns."
+      examples   = ["Where should I invest my money?", "What stocks should I buy?"]
+    },
+    {
+      name       = "medical_advice"
+      definition = "Medical diagnosis or treatment recommendations that should only come from licensed healthcare professionals."
+      examples   = ["Do I have cancer?", "Should I take this medication?"]
     }
-    tier_config {
-      tier_name = "CLASSIC"
-    }
-  }
+  ]
 
-  word_policy_config {
-    managed_word_lists_config {
-      type = "PROFANITY"
-    }
-    words_config {
-      text = "HATE"
-    }
+  topic_tier = "CLASSIC"
+
+  # Word Policy
+  managed_word_lists   = ["PROFANITY"]
+  custom_blocked_words = ["HATE", "VIOLENCE"]
+
+  tags = {
+    Project   = "text-to-sql"
+    ManagedBy = "Terraform"
   }
 }
 
-resource "aws_bedrock_guardrail_version" "guardrail_version" {
-  description   = "example"
-  guardrail_arn = aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_arn
-  skip_destroy  = true
-}
+# resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
+#   agent_name                  = "texttosql-bedrock-agent"
+#   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
+#   idle_session_ttl_in_seconds = 500
+#   foundation_model            = "anthropic.claude-opus-4-5-20251101-v1:0"
+#   guardrail_configuration = [{
+#     guardrail_identifier = "${aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_id}"
+#     guardrail_version    = "${aws_bedrock_guardrail_version.guardrail_version.version}"
+#   }]
+# }
+
+# resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_base" {
+#   name     = "texttosql-bedrock-agent-knowledge-base"
+#   role_arn = aws_iam_role.texttosql_bedrock_agent_role.arn
+#   knowledge_base_configuration {
+#     vector_knowledge_base_configuration {
+#       embedding_model_arn = "arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0"
+#     }
+#     type = "VECTOR"
+#   }
+#   storage_configuration {
+#     type = "PINECONE"
+#     pinecone_configuration {
+#       connection_string      = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
+#       credentials_secret_arn = module.pinecone_api_key.arn
+#       namespace              = "__default__"
+#       field_mapping {
+#         text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
+#         metadata_field = "AMAZON_BEDROCK_METADATA"
+#       }
+#     }
+#   }
+# }
+
+# resource "aws_bedrockagent_data_source" "texttosql_bedrock_agent_data_source" {
+#   knowledge_base_id = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
+#   name              = "texttosql-bedrock-agent-data-source"
+#   description       = "TextToSQL Bedrock Agent Data Source"
+#   data_source_configuration {
+#     type = "S3"
+#     s3_configuration {
+#       bucket_arn = module.bedrock_knowledge_base_data_source.arn
+#     }
+#   }
+# }
+
+# resource "aws_bedrockagent_agent_knowledge_base_association" "texttosql_bedrock_agent_knowledge_base_association" {
+#   agent_id             = aws_bedrockagent_agent.texttosql_bedrock_agent.agent_id
+#   description          = "texttosql-bedrock-agent-knowledge-base-association"
+#   knowledge_base_id    = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
+#   knowledge_base_state = "ENABLED"
+# }
+
+# resource "aws_bedrock_guardrail" "texttosql_bedrock_agent_guardrail" {
+#   name                      = "example"
+#   blocked_input_messaging   = "example"
+#   blocked_outputs_messaging = "example"
+#   description               = "example"
+
+#   content_policy_config {
+#     filters_config {
+#       input_strength  = "MEDIUM"
+#       output_strength = "MEDIUM"
+#       type            = "HATE"
+#     }
+#     tier_config {
+#       tier_name = "STANDARD"
+#     }
+#   }
+
+#   sensitive_information_policy_config {
+#     pii_entities_config {
+#       action         = "BLOCK"
+#       input_action   = "BLOCK"
+#       output_action  = "ANONYMIZE"
+#       input_enabled  = true
+#       output_enabled = true
+#       type           = "NAME"
+#     }
+
+#     regexes_config {
+#       action         = "BLOCK"
+#       input_action   = "BLOCK"
+#       output_action  = "BLOCK"
+#       input_enabled  = true
+#       output_enabled = false
+#       description    = "example regex"
+#       name           = "regex_example"
+#       pattern        = "^\\d{3}-\\d{2}-\\d{4}$"
+#     }
+#   }
+
+#   topic_policy_config {
+#     topics_config {
+#       name       = "investment_topic"
+#       examples   = ["Where should I invest my money ?"]
+#       type       = "DENY"
+#       definition = "Investment advice refers to inquiries, guidance, or recommendations regarding the management or allocation of funds or assets with the goal of generating returns ."
+#     }
+#     tier_config {
+#       tier_name = "CLASSIC"
+#     }
+#   }
+
+#   word_policy_config {
+#     managed_word_lists_config {
+#       type = "PROFANITY"
+#     }
+#     words_config {
+#       text = "HATE"
+#     }
+#   }
+# }
+
+# resource "aws_bedrock_guardrail_version" "guardrail_version" {
+#   description   = "example"
+#   guardrail_arn = aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_arn
+#   skip_destroy  = true
+# }
