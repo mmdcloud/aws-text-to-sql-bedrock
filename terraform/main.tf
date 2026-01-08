@@ -1,6 +1,12 @@
 data "aws_caller_identity" "current" {}
 
+resource "random_id" "id" {
+  byte_length = 8
+}
+
 data "aws_partition" "current" {}
+
+data "aws_elb_service_account" "main" {}
 
 data "aws_region" "current" {}
 
@@ -287,7 +293,38 @@ module "frontend_lb_logs" {
   source        = "./modules/s3"
   bucket_name   = "frontend-lb-logs"
   objects       = []
-  bucket_policy = ""
+  bucket_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSLogDeliveryWrite"
+        Effect = "Allow"
+        Principal = {
+          Service = "logging.s3.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "arn:aws:s3:::frontend-lb-logs-${random.id.hex}/*"
+      },
+      {
+        Sid    = "AWSLogDeliveryAclCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "logging.s3.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = "arn:aws:s3:::frontend-lb-logs-${random.id.hex}"
+      },
+      {
+        Sid    = "AWSELBAccountWrite"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
+        }
+        Action   = "s3:PutObject"
+        Resource = "arn:aws:s3:::frontend-lb-logs-${random.id.hex}/*"
+      }
+    ]
+  })
   cors = [
     {
       allowed_headers = ["*"]
@@ -310,7 +347,38 @@ module "backend_lb_logs" {
   source        = "./modules/s3"
   bucket_name   = "backend-lb-logs"
   objects       = []
-  bucket_policy = ""
+  bucket_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSLogDeliveryWrite"
+        Effect = "Allow"
+        Principal = {
+          Service = "logging.s3.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
+      },
+      {
+        Sid    = "AWSLogDeliveryAclCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "logging.s3.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}"
+      },
+      {
+        Sid    = "AWSELBAccountWrite"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
+        }
+        Action   = "s3:PutObject"
+        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
+      }
+    ]
+  })
   cors = [
     {
       allowed_headers = ["*"]
@@ -386,15 +454,15 @@ module "db" {
     {
       name  = "max_connections"
       value = "1000"
-    },
-    {
-      name  = "innodb_buffer_pool_size"
-      value = "{DBInstanceClassMemory*3/4}"
-    },
-    {
-      name  = "slow_query_log"
-      value = "1"
     }
+    # {
+    #   name  = "innodb_buffer_pool_size"
+    #   value = "{DBInstanceClassMemory*3/4}"
+    # },
+    # {
+    #   name  = "slow_query_log"
+    #   value = "1"
+    # }
   ]
 }
 
@@ -605,13 +673,7 @@ module "ecs" {
           cpu       = 1024
           memory    = 2048
           essential = true
-          image     = "${module.frontend_container_registry.repository_url}:latest"
-          placementStrategy = [
-            {
-              type  = "spread",
-              field = "attribute:ecs.availability-zone"
-            }
-          ]
+          image     = "${module.frontend_container_registry.repository_url}:latest"          
           healthCheck = {
             command = ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"]
           }
@@ -774,7 +836,7 @@ module "frontend_app_autoscaling_policy" {
         adjustment_type          = "ChangeInCapacity"
         cooldown                 = 60
         metric_aggregation_type  = "Average"
-        min_adjustment_magnitude = 1
+        # min_adjustment_magnitude = 1
         step_adjustment = [
           {
             metric_interval_lower_bound = 0
@@ -806,7 +868,7 @@ module "backend_app_autoscaling_policy" {
         adjustment_type          = "ChangeInCapacity"
         cooldown                 = 60
         metric_aggregation_type  = "Average"
-        min_adjustment_magnitude = 1
+        # min_adjustment_magnitude = 1
         step_adjustment = [
           {
             metric_interval_lower_bound = 0
