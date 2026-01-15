@@ -407,6 +407,36 @@ module "frontend_container_registry" {
   image_tag_mutability = "IMMUTABLE"
   bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region} http://${module.backend_lb.dns_name}"
   name                 = "frontend-td"
+  lifecycle_policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep last 10 images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["v"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 2
+        description  = "Delete untagged images older than 7 days"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 7
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
 }
 
 module "backend_container_registry" {
@@ -416,6 +446,36 @@ module "backend_container_registry" {
   image_tag_mutability = "IMMUTABLE"
   bash_command         = "bash ${path.cwd}/../src/backend/artifact_push.sh backend-td ${var.region}"
   name                 = "backend-td"
+  lifecycle_policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep last 10 images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["v"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 2
+        description  = "Delete untagged images older than 7 days"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 7
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
 }
 
 # ---------------------------------------------------------------------

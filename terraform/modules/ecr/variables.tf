@@ -13,3 +13,15 @@ variable "scan_on_push" {
 variable "bash_command" {
   type = string
 }
+variable "lifecycle_policy" {
+  type = string
+  default = null
+}
+variable "encryption_type" {
+  type = string
+  default = null
+}
+variable "kms_key" {
+  type = string
+  default = null
+}
