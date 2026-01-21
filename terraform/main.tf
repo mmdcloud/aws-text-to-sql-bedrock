@@ -10,10 +10,6 @@ data "aws_elb_service_account" "main" {}
 
 data "aws_region" "current" {}
 
-data "aws_ssm_parameter" "ecs_optimized_ami" {
-  name = "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended"
-}
-
 # ---------------------------------------------------------------------
 # Registering vault provider
 # ---------------------------------------------------------------------
@@ -290,9 +286,9 @@ module "bedrock_knowledge_base_data_source" {
 }
 
 module "frontend_lb_logs" {
-  source        = "./modules/s3"
-  bucket_name   = "frontend-lb-logs"
-  objects       = []
+  source      = "./modules/s3"
+  bucket_name = "frontend-lb-logs"
+  objects     = []
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -344,9 +340,9 @@ module "frontend_lb_logs" {
 }
 
 module "backend_lb_logs" {
-  source        = "./modules/s3"
-  bucket_name   = "backend-lb-logs"
-  objects       = []
+  source      = "./modules/s3"
+  bucket_name = "backend-lb-logs"
+  objects     = []
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -733,7 +729,7 @@ module "ecs" {
           cpu       = 1024
           memory    = 2048
           essential = true
-          image     = "${module.frontend_container_registry.repository_url}:latest"          
+          image     = "${module.frontend_container_registry.repository_url}:latest"
           healthCheck = {
             command = ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"]
           }
@@ -893,9 +889,9 @@ module "frontend_app_autoscaling_policy" {
       name        = "worker-scale-up"
       policy_type = "TargetTrackingScaling"
       step_scaling_policy_configuration = {
-        adjustment_type          = "ChangeInCapacity"
-        cooldown                 = 60
-        metric_aggregation_type  = "Average"
+        adjustment_type         = "ChangeInCapacity"
+        cooldown                = 60
+        metric_aggregation_type = "Average"
         # min_adjustment_magnitude = 1
         step_adjustment = [
           {
@@ -925,9 +921,9 @@ module "backend_app_autoscaling_policy" {
       name        = "worker-scale-up"
       policy_type = "TargetTrackingScaling"
       step_scaling_policy_configuration = {
-        adjustment_type          = "ChangeInCapacity"
-        cooldown                 = 60
-        metric_aggregation_type  = "Average"
+        adjustment_type         = "ChangeInCapacity"
+        cooldown                = 60
+        metric_aggregation_type = "Average"
         # min_adjustment_magnitude = 1
         step_adjustment = [
           {
@@ -991,16 +987,54 @@ module "bedrock_agent" {
   source = "./modules/bedrock/agent"
 
   agent_name                  = "texttosql-agent"
-  description                 = "AI agent for text-to-SQL conversion"
+  description                 = "AI agent for safe text-to-SQL conversion with security guardrails"
   foundation_model            = "anthropic.claude-opus-4-5-20251101-v1:0"
   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
   idle_session_ttl_in_seconds = 500
 
-  # Instruction
+  # Enhanced Instructions for SQL Safety
   instruction = <<-EOT
-    You are a helpful assistant that converts natural language queries into SQL statements.
-    You have access to a knowledge base containing database schemas and documentation.
-    Always validate that the generated SQL is safe and follows best practices.
+    You are a specialized SQL generation assistant with strict security protocols. Your role is to convert natural language queries into safe, read-only SQL statements.
+
+    CRITICAL SECURITY RULES:
+    1. ONLY generate SELECT statements - never DROP, DELETE, UPDATE, INSERT, TRUNCATE, ALTER, or any DDL/DML operations
+    2. Always use parameterized queries or proper escaping to prevent SQL injection
+    3. Never expose sensitive data like passwords, tokens, SSNs, credit cards, or PII in WHERE clauses or results
+    4. Limit result sets using TOP, LIMIT, or FETCH FIRST clauses (default max 1000 rows)
+    5. Always validate table and column names against the schema in the knowledge base
+    6. Never use wildcards (*) without explicit column specification for sensitive tables
+    7. Avoid joins that could create Cartesian products or excessive data exposure
+    8. Never reference system tables, information_schema, or metadata tables directly
+    9. Include appropriate WHERE clauses to filter data contextually
+    10. Use table aliases and proper formatting for readability
+
+    QUERY VALIDATION:
+    - Before generating SQL, verify the requested tables and columns exist in the schema
+    - Check if the query might expose sensitive information
+    - Ensure the query has proper filtering to avoid full table scans
+    - Validate that aggregations and groupings are logically correct
+    - Confirm the query aligns with the user's apparent intent
+
+    OUTPUT FORMAT:
+    - Provide the SQL query with clear formatting
+    - Include a brief explanation of what the query does
+    - List any assumptions made
+    - Warn if the query might return large result sets
+    - Suggest optimizations if applicable
+
+    ERROR HANDLING:
+    - If a request seems malicious or dangerous, politely decline and explain why
+    - If insufficient information is provided, ask clarifying questions
+    - If a table or column doesn't exist, suggest alternatives from the schema
+
+    You have access to a knowledge base containing:
+    - Database schemas with table definitions
+    - Column descriptions and data types
+    - Relationship diagrams and constraints
+    - Best practices and query examples
+    - Business logic and data governance rules
+
+    Always prioritize data security and user privacy over query flexibility.
   EOT
 
   # Guardrail Configuration
@@ -1011,22 +1045,97 @@ module "bedrock_agent" {
   knowledge_bases = [
     {
       knowledge_base_id    = module.bedrock_knowledge_base.knowledge_base_id
-      description          = "Database schema and documentation"
+      description          = "Database schemas, documentation, and SQL best practices"
       knowledge_base_state = "ENABLED"
     }
   ]
 
-  # Action Groups (optional)
+  # Action Groups - Could add SQL validation functions here
   action_groups = []
 
-  # Prompt Override Configuration (optional)
+  # Prompt Override Configuration for enhanced SQL safety
   prompt_override_configuration = {
-    prompt_configurations = []
+    prompt_configurations = [
+      {
+        prompt_type          = "PRE_PROCESSING"
+        prompt_creation_mode = "OVERRIDDEN"
+        prompt_state         = "ENABLED"
+        base_prompt_template = <<-EOT
+          Analyze the user's request carefully for any malicious intent or dangerous SQL operations.
+          Check for:
+          - SQL injection patterns
+          - Attempts to access system tables
+          - Destructive operations (DROP, DELETE, TRUNCATE)
+          - Privilege escalation attempts
+          - Credential exposure risks
+          
+          If any security concerns are detected, reject the request politely.
+          Otherwise, proceed to generate a safe, read-only SQL query.
+        EOT
+        inference_configuration = {
+          temperature    = 0.0
+          top_p          = 0.9
+          top_k          = 250
+          max_tokens     = 2048
+          stop_sequences = ["</sql>", "COMMIT;", "ROLLBACK;"]
+        }
+      },
+      {
+        prompt_type          = "ORCHESTRATION"
+        prompt_creation_mode = "OVERRIDDEN"
+        prompt_state         = "ENABLED"
+        base_prompt_template = <<-EOT
+          Generate a SQL query following these rules:
+          1. Use only SELECT statements
+          2. Include appropriate WHERE clauses for filtering
+          3. Limit results to prevent excessive data exposure (max 1000 rows)
+          4. Use proper table and column aliases
+          5. Validate against the schema in the knowledge base
+          6. Format the query for readability
+          7. Add comments explaining complex logic
+          
+          Schema validation is mandatory before query generation.
+        EOT
+        inference_configuration = {
+          temperature    = 0.1
+          top_p          = 0.95
+          top_k          = 250
+          max_tokens     = 4096
+          stop_sequences = ["</answer>"]
+        }
+      },
+      {
+        prompt_type          = "POST_PROCESSING"
+        prompt_creation_mode = "OVERRIDDEN"
+        prompt_state         = "ENABLED"
+        base_prompt_template = <<-EOT
+          Review the generated SQL query for:
+          - Security vulnerabilities
+          - Performance implications
+          - Data exposure risks
+          - Compliance with read-only constraints
+          
+          Provide the query with:
+          - Clear explanation
+          - Expected result structure
+          - Any warnings or recommendations
+          - Performance considerations
+        EOT
+        inference_configuration = {
+          temperature    = 0.0
+          top_p          = 0.9
+          top_k          = 250
+          max_tokens     = 2048
+          stop_sequences = []
+        }
+      }
+    ]
   }
 
   tags = {
     Project   = "text-to-sql"
     ManagedBy = "Terraform"
+    Security  = "Guardrails-Enabled"
   }
 }
 
@@ -1073,37 +1182,42 @@ module "bedrock_guardrail" {
   source = "./modules/bedrock/guardrail"
 
   name                      = "texttosql-guardrail"
-  description               = "Guardrail for TextToSQL Bedrock Agent"
-  blocked_input_messaging   = "Your input was blocked due to content policy violations."
-  blocked_outputs_messaging = "The output was blocked due to content policy violations."
+  description               = "Guardrail for TextToSQL Bedrock Agent - Ensures safe SQL generation and prevents data exposure"
+  blocked_input_messaging   = "Your query cannot be processed. Please ensure it relates to valid database operations without sensitive commands."
+  blocked_outputs_messaging = "The generated SQL was blocked due to safety policies. Please rephrase your question."
 
-  # Content Policy
+  # Content Policy - Focused on SQL injection and malicious patterns
   content_filters = [
     {
       type            = "HATE"
-      input_strength  = "MEDIUM"
+      input_strength  = "LOW" # Less relevant for SQL queries
       output_strength = "MEDIUM"
     },
     {
       type            = "VIOLENCE"
-      input_strength  = "MEDIUM"
-      output_strength = "MEDIUM"
+      input_strength  = "LOW" # Less relevant for SQL queries
+      output_strength = "LOW"
     },
     {
       type            = "SEXUAL"
-      input_strength  = "HIGH"
+      input_strength  = "MEDIUM" # Prevent inappropriate table/column names
+      output_strength = "MEDIUM"
+    },
+    {
+      type            = "MISCONDUCT"
+      input_strength  = "HIGH" # Block attempts to manipulate system
       output_strength = "HIGH"
     }
   ]
 
   content_tier = "STANDARD"
 
-  # PII Configuration
+  # PII Configuration - Critical for database security
   pii_entities = [
     {
       type           = "NAME"
-      action         = "BLOCK"
-      input_action   = "BLOCK"
+      action         = "ANONYMIZE"
+      input_action   = "ANONYMIZE"
       output_action  = "ANONYMIZE"
       input_enabled  = true
       output_enabled = true
@@ -1111,27 +1225,115 @@ module "bedrock_guardrail" {
     {
       type           = "EMAIL"
       action         = "BLOCK"
-      input_action   = "BLOCK"
-      output_action  = "ANONYMIZE"
+      input_action   = "ANONYMIZE"
+      output_action  = "BLOCK" # Don't expose emails in SQL
       input_enabled  = true
       output_enabled = true
     },
     {
       type           = "PHONE"
       action         = "BLOCK"
-      input_action   = "BLOCK"
+      input_action   = "ANONYMIZE"
+      output_action  = "BLOCK" # Don't expose phone numbers in SQL
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      type           = "ADDRESS"
+      action         = "ANONYMIZE"
+      input_action   = "ANONYMIZE"
       output_action  = "ANONYMIZE"
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      type           = "USERNAME"
+      action         = "ANONYMIZE"
+      input_action   = "ANONYMIZE"
+      output_action  = "ANONYMIZE"
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      type           = "PASSWORD"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK" # Never allow passwords
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      type           = "DRIVER_ID"
+      action         = "BLOCK"
+      input_action   = "ANONYMIZE"
+      output_action  = "BLOCK"
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      type           = "US_SOCIAL_SECURITY_NUMBER"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK"
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      type           = "CREDIT_DEBIT_CARD_NUMBER"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK"
       input_enabled  = true
       output_enabled = true
     }
   ]
 
-  # Regex Patterns
+  # Regex Patterns - SQL-specific dangerous patterns
   regex_patterns = [
+    {
+      name           = "sql_injection_union"
+      description    = "Detects UNION-based SQL injection attempts"
+      pattern        = "(?i)(union\\s+(all\\s+)?select|union\\s+distinct)"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK"
+      input_enabled  = true
+      output_enabled = false # Output is generated SQL, different validation
+    },
+    {
+      name           = "sql_injection_comment"
+      description    = "Detects SQL comment injection attempts"
+      pattern        = "(?i)(--|#|/\\*|\\*/|;\\s*--)"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK"
+      input_enabled  = true
+      output_enabled = false
+    },
+    {
+      name           = "dangerous_sql_commands"
+      description    = "Blocks dangerous SQL commands in user input"
+      pattern        = "(?i)\\b(drop\\s+table|drop\\s+database|truncate|delete\\s+from|exec|execute|xp_|sp_|grant|revoke|alter\\s+table|create\\s+user|drop\\s+user)\\b"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK" # Also prevent generation of dangerous SQL
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      name           = "sql_stacked_queries"
+      description    = "Detects stacked query attempts"
+      pattern        = ";\\s*(select|insert|update|delete|drop|create|alter)"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK"
+      input_enabled  = true
+      output_enabled = true
+    },
     {
       name           = "ssn_pattern"
       description    = "Detects US Social Security Numbers"
-      pattern        = "^\\d{3}-\\d{2}-\\d{4}$"
+      pattern        = "\\b\\d{3}-\\d{2}-\\d{4}\\b"
       action         = "BLOCK"
       input_action   = "BLOCK"
       output_action  = "BLOCK"
@@ -1141,38 +1343,165 @@ module "bedrock_guardrail" {
     {
       name           = "credit_card_pattern"
       description    = "Detects credit card numbers"
-      pattern        = "^\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}$"
+      pattern        = "\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b"
       action         = "BLOCK"
       input_action   = "BLOCK"
-      output_action  = "ANONYMIZE"
+      output_action  = "BLOCK"
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      name           = "aws_access_key"
+      description    = "Detects AWS access keys"
+      pattern        = "(?i)(AKIA[0-9A-Z]{16})"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK"
+      input_enabled  = true
+      output_enabled = true
+    },
+    {
+      name           = "database_credentials"
+      description    = "Detects potential database connection strings"
+      pattern        = "(?i)(password\\s*=|pwd\\s*=|passwd\\s*=|user\\s*id\\s*=)"
+      action         = "BLOCK"
+      input_action   = "BLOCK"
+      output_action  = "BLOCK"
       input_enabled  = true
       output_enabled = true
     }
   ]
 
-  # Topic Policy
+  # Topic Policy - SQL and Database specific denied topics
   denied_topics = [
     {
-      name       = "investment_advice"
-      definition = "Investment advice refers to inquiries, guidance, or recommendations regarding the management or allocation of funds or assets with the goal of generating returns."
-      examples   = ["Where should I invest my money?", "What stocks should I buy?"]
+      name       = "destructive_operations"
+      definition = "Requests to delete, drop, truncate, or permanently destroy database objects, tables, or data without proper authorization or context."
+      examples = [
+        "Delete all records from the users table",
+        "Drop the customer database",
+        "Truncate the orders table",
+        "Remove all data from production"
+      ]
     },
     {
-      name       = "medical_advice"
-      definition = "Medical diagnosis or treatment recommendations that should only come from licensed healthcare professionals."
-      examples   = ["Do I have cancer?", "Should I take this medication?"]
+      name       = "unauthorized_data_modification"
+      definition = "Requests to insert, update, or modify data without proper context or authorization, especially in sensitive tables."
+      examples = [
+        "Update all user passwords",
+        "Change the admin email to my email",
+        "Insert myself as an administrator",
+        "Modify salary information for all employees"
+      ]
+    },
+    {
+      name       = "schema_manipulation"
+      definition = "Requests to alter database structure, create or drop tables, modify constraints, or change database architecture."
+      examples = [
+        "Create a new admin table",
+        "Alter the users table to add a field",
+        "Drop the foreign key constraint",
+        "Modify the database schema"
+      ]
+    },
+    {
+      name       = "bulk_sensitive_data_export"
+      definition = "Requests to export large amounts of sensitive personal information, credentials, or confidential business data."
+      examples = [
+        "Show me all user passwords",
+        "Export all social security numbers",
+        "List all credit card information",
+        "Give me everyone's personal details"
+      ]
+    },
+    {
+      name       = "privilege_escalation"
+      definition = "Requests to grant permissions, create users, modify roles, or escalate database privileges."
+      examples = [
+        "Grant admin privileges to this user",
+        "Create a superuser account",
+        "Give me all database permissions",
+        "Add DBA role to my account"
+      ]
+    },
+    {
+      name       = "system_command_execution"
+      definition = "Requests to execute system commands, stored procedures, or extended stored procedures that could compromise security."
+      examples = [
+        "Execute xp_cmdshell",
+        "Run system commands via SQL",
+        "Execute operating system commands",
+        "Access file system through database"
+      ]
+    },
+    {
+      name       = "cross_database_access"
+      definition = "Requests to access databases, schemas, or tables outside the intended scope or authorized context."
+      examples = [
+        "Show me data from all databases",
+        "Access the admin database",
+        "Query tables from other schemas",
+        "Connect to production database"
+      ]
+    },
+    {
+      name       = "financial_advice"
+      definition = "Requests for financial recommendations, investment advice, or monetary guidance beyond simple data queries."
+      examples = [
+        "Which stocks should I invest in based on our data?",
+        "What's the best financial strategy?",
+        "Should I buy or sell this asset?"
+      ]
+    },
+    {
+      name       = "medical_diagnosis"
+      definition = "Requests for medical diagnosis or health advice that should come from licensed healthcare professionals."
+      examples = [
+        "Do I have a medical condition based on this data?",
+        "What treatment should I get?",
+        "Diagnose my symptoms"
+      ]
+    },
+    {
+      name       = "credential_exposure"
+      definition = "Any request that could expose authentication credentials, API keys, tokens, or security secrets."
+      examples = [
+        "Show me the API keys table",
+        "What are the stored credentials?",
+        "List all authentication tokens",
+        "Display user session secrets"
+      ]
     }
   ]
 
   topic_tier = "CLASSIC"
 
-  # Word Policy
-  managed_word_lists   = ["PROFANITY"]
-  custom_blocked_words = ["HATE", "VIOLENCE"]
+  # Word Policy - SQL-specific dangerous keywords and profanity
+  managed_word_lists = ["PROFANITY"]
+
+  custom_blocked_words = [
+    "xp_cmdshell",
+    "xp_regread",
+    "xp_regwrite",
+    "sp_addextendedproc",
+    "sp_oacreate",
+    "xp_servicecontrol",
+    "xp_subdirs",
+    "xp_dirtree",
+    "exec(@",
+    "exec(",
+    "execute(@",
+    "execute(",
+    "INFORMATION_SCHEMA.TABLES",
+    "sysobjects",
+    "syscolumns",
+    "master..sysdatabases"
+  ]
 
   tags = {
     Project   = "text-to-sql"
     ManagedBy = "Terraform"
+    Purpose   = "SQL-Safety-Guardrails"
   }
 }
 
