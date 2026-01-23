@@ -62,9 +62,9 @@ variable "action_groups" {
     skip_resource_in_use_check = bool
     lambda_arn                 = string
     api_schema = object({
-      payload         = string
-      s3_bucket_name  = string
-      s3_object_key   = string
+      payload        = string
+      s3_bucket_name = string
+      s3_object_key  = string
     })
   }))
   default = []
@@ -74,11 +74,19 @@ variable "prompt_override_configuration" {
   description = "Prompt override configuration"
   type = object({
     prompt_configurations = list(object({
-      prompt_type              = string
-      prompt_creation_mode     = string
-      prompt_state             = string
-      base_prompt_template     = string
-      inference_configuration  = map(string)
+      prompt_type          = string
+      prompt_creation_mode = string
+      prompt_state         = string
+      base_prompt_template = string
+      inference_configuration = list(
+        object({
+          temperature    = number
+          top_p          = number
+          top_k          = number
+          max_length     = number
+          stop_sequences = list(string)
+        })
+      )
     }))
   })
   default = null

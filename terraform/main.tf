@@ -91,7 +91,7 @@ module "backend_lb_sg" {
       to_port         = 80
       protocol        = "tcp"
       cidr_blocks     = []
-      security_groups = [module.ecs_frontend_sg.sg]
+      security_groups = [module.ecs_frontend_sg.id]
     },
     {
       description     = "HTTPS Traffic"
@@ -99,7 +99,7 @@ module "backend_lb_sg" {
       to_port         = 443
       protocol        = "tcp"
       cidr_blocks     = []
-      security_groups = [module.ecs_frontend_sg.sg]
+      security_groups = [module.ecs_frontend_sg.id]
     }
   ]
   egress_rules = [
@@ -299,7 +299,7 @@ module "frontend_lb_logs" {
           Service = "logging.s3.amazonaws.com"
         }
         Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::frontend-lb-logs-${random.id.hex}/*"
+        Resource = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}/*"
       },
       {
         Sid    = "AWSLogDeliveryAclCheck"
@@ -308,7 +308,7 @@ module "frontend_lb_logs" {
           Service = "logging.s3.amazonaws.com"
         }
         Action   = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::frontend-lb-logs-${random.id.hex}"
+        Resource = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}"
       },
       {
         Sid    = "AWSELBAccountWrite"
@@ -317,7 +317,7 @@ module "frontend_lb_logs" {
           AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
         }
         Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::frontend-lb-logs-${random.id.hex}/*"
+        Resource = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}/*"
       }
     ]
   })
@@ -339,59 +339,59 @@ module "frontend_lb_logs" {
   force_destroy      = true
 }
 
-module "backend_lb_logs" {
-  source      = "./modules/s3"
-  bucket_name = "backend-lb-logs"
-  objects     = []
-  bucket_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AWSLogDeliveryWrite"
-        Effect = "Allow"
-        Principal = {
-          Service = "logging.s3.amazonaws.com"
-        }
-        Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
-      },
-      {
-        Sid    = "AWSLogDeliveryAclCheck"
-        Effect = "Allow"
-        Principal = {
-          Service = "logging.s3.amazonaws.com"
-        }
-        Action   = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}"
-      },
-      {
-        Sid    = "AWSELBAccountWrite"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
-        }
-        Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
-      }
-    ]
-  })
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    },
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["PUT"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
-  versioning_enabled = "Enabled"
-  force_destroy      = true
-}
+# module "backend_lb_logs" {
+#   source      = "./modules/s3"
+#   bucket_name = "backend-lb-logs"
+#   objects     = []
+#   bucket_policy = jsonencode({
+#     Version = "2012-10-17"
+#     Statement = [
+#       {
+#         Sid    = "AWSLogDeliveryWrite"
+#         Effect = "Allow"
+#         Principal = {
+#           Service = "logging.s3.amazonaws.com"
+#         }
+#         Action   = "s3:PutObject"
+#         Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
+#       },
+#       {
+#         Sid    = "AWSLogDeliveryAclCheck"
+#         Effect = "Allow"
+#         Principal = {
+#           Service = "logging.s3.amazonaws.com"
+#         }
+#         Action   = "s3:GetBucketAcl"
+#         Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}"
+#       },
+#       {
+#         Sid    = "AWSELBAccountWrite"
+#         Effect = "Allow"
+#         Principal = {
+#           AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
+#         }
+#         Action   = "s3:PutObject"
+#         Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
+#       }
+#     ]
+#   })
+#   cors = [
+#     {
+#       allowed_headers = ["*"]
+#       allowed_methods = ["GET"]
+#       allowed_origins = ["*"]
+#       max_age_seconds = 3000
+#     },
+#     {
+#       allowed_headers = ["*"]
+#       allowed_methods = ["PUT"]
+#       allowed_origins = ["*"]
+#       max_age_seconds = 3000
+#     }
+#   ]
+#   versioning_enabled = "Enabled"
+#   force_destroy      = true
+# }
 
 # -----------------------------------------------------------------------------------------
 # ECR Module
@@ -401,7 +401,7 @@ module "frontend_container_registry" {
   force_delete         = true
   scan_on_push         = false
   image_tag_mutability = "IMMUTABLE"
-  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region} http://${module.backend_lb.dns_name}"
+  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region}"
   name                 = "frontend-td"
   lifecycle_policy = jsonencode({
     rules = [
@@ -435,44 +435,44 @@ module "frontend_container_registry" {
   })
 }
 
-module "backend_container_registry" {
-  source               = "./modules/ecr"
-  force_delete         = true
-  scan_on_push         = false
-  image_tag_mutability = "IMMUTABLE"
-  bash_command         = "bash ${path.cwd}/../src/backend/artifact_push.sh backend-td ${var.region}"
-  name                 = "backend-td"
-  lifecycle_policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 10 images"
-        selection = {
-          tagStatus     = "tagged"
-          tagPrefixList = ["v"]
-          countType     = "imageCountMoreThan"
-          countNumber   = 10
-        }
-        action = {
-          type = "expire"
-        }
-      },
-      {
-        rulePriority = 2
-        description  = "Delete untagged images older than 7 days"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 7
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
-}
+# module "backend_container_registry" {
+#   source               = "./modules/ecr"
+#   force_delete         = true
+#   scan_on_push         = false
+#   image_tag_mutability = "IMMUTABLE"
+#   bash_command         = "bash ${path.cwd}/../src/backend/artifact_push.sh backend-td ${var.region}"
+#   name                 = "backend-td"
+#   lifecycle_policy = jsonencode({
+#     rules = [
+#       {
+#         rulePriority = 1
+#         description  = "Keep last 10 images"
+#         selection = {
+#           tagStatus     = "tagged"
+#           tagPrefixList = ["v"]
+#           countType     = "imageCountMoreThan"
+#           countNumber   = 10
+#         }
+#         action = {
+#           type = "expire"
+#         }
+#       },
+#       {
+#         rulePriority = 2
+#         description  = "Delete untagged images older than 7 days"
+#         selection = {
+#           tagStatus   = "untagged"
+#           countType   = "sinceImagePushed"
+#           countUnit   = "days"
+#           countNumber = 7
+#         }
+#         action = {
+#           type = "expire"
+#         }
+#       }
+#     ]
+#   })
+# }
 
 # ---------------------------------------------------------------------
 # DB configuration
@@ -572,58 +572,58 @@ module "frontend_lb" {
   }
 }
 
-module "backend_lb" {
-  source                     = "terraform-aws-modules/alb/aws"
-  name                       = "backend-lb"
-  load_balancer_type         = "application"
-  vpc_id                     = module.vpc.vpc_id
-  subnets                    = module.vpc.private_subnets
-  enable_deletion_protection = false
-  drop_invalid_header_fields = true
-  ip_address_type            = "ipv4"
-  internal                   = true
-  security_groups = [
-    module.backend_lb_sg.id
-  ]
-  access_logs = {
-    bucket = "${module.backend_lb_logs.bucket}"
-  }
-  listeners = {
-    backend_lb_http_listener = {
-      port     = 80
-      protocol = "HTTP"
-      forward = {
-        target_group_key = "backend_lb_target_group"
-      }
-    }
-  }
-  target_groups = {
-    backend_lb_target_group = {
-      backend_protocol = "HTTP"
-      backend_port     = 80
-      target_type      = "ip"
-      health_check = {
-        enabled             = true
-        healthy_threshold   = 3
-        interval            = 30
-        path                = "/"
-        port                = 80
-        protocol            = "HTTP"
-        unhealthy_threshold = 3
-      }
-      create_attachment = false
-    }
-  }
-  tags = {
-    Project = "text-to-sql-backend-lb"
-  }
-}
+# module "backend_lb" {
+#   source                     = "terraform-aws-modules/alb/aws"
+#   name                       = "backend-lb"
+#   load_balancer_type         = "application"
+#   vpc_id                     = module.vpc.vpc_id
+#   subnets                    = module.vpc.private_subnets
+#   enable_deletion_protection = false
+#   drop_invalid_header_fields = true
+#   ip_address_type            = "ipv4"
+#   internal                   = true
+#   security_groups = [
+#     module.backend_lb_sg.id
+#   ]
+#   access_logs = {
+#     bucket = "${module.backend_lb_logs.bucket}"
+#   }
+#   listeners = {
+#     backend_lb_http_listener = {
+#       port     = 80
+#       protocol = "HTTP"
+#       forward = {
+#         target_group_key = "backend_lb_target_group"
+#       }
+#     }
+#   }
+#   target_groups = {
+#     backend_lb_target_group = {
+#       backend_protocol = "HTTP"
+#       backend_port     = 80
+#       target_type      = "ip"
+#       health_check = {
+#         enabled             = true
+#         healthy_threshold   = 3
+#         interval            = 30
+#         path                = "/"
+#         port                = 80
+#         protocol            = "HTTP"
+#         unhealthy_threshold = 3
+#       }
+#       create_attachment = false
+#     }
+#   }
+#   tags = {
+#     Project = "text-to-sql-backend-lb"
+#   }
+# }
 
 # ---------------------------------------------------------------------
 # ECS configuration
 # ---------------------------------------------------------------------
 module "ecs_task_execution_role" {
-  source             = "../../../modules/iam"
+  source             = "./modules/iam"
   role_name          = "ecs-task-execution-role"
   role_description   = "IAM role for ECS task execution"
   policy_name        = "ecs-task-execution-policy"
@@ -706,7 +706,7 @@ module "ecs" {
     }
   }
   services = {
-    ecs-frontend = {
+    ecs_frontend = {
       cpu                    = 2048
       memory                 = 4096
       task_exec_iam_role_arn = module.ecs_task_execution_role.arn
@@ -725,7 +725,7 @@ module "ecs" {
       scheduling_strategy      = "REPLICA"
       requires_compatibilities = ["FARGATE"]
       container_definitions = {
-        ecs-frontend = {
+        ecs_frontend = {
           cpu       = 1024
           memory    = 2048
           essential = true
@@ -742,17 +742,17 @@ module "ecs" {
           ]
           portMappings = [
             {
-              name          = "ecs-frontend"
+              name          = "ecs_frontend"
               containerPort = 3000
               hostPort      = 3000
               protocol      = "tcp"
             }
           ]
           environment = [
-            {
-              name  = "BASE_URL"
-              value = "${module.backend_lb.dns_name}"
-            }
+            # {
+            #   name  = "BASE_URL"
+            #   value = "${module.backend_lb.dns_name}"
+            # }
           ]
           capacity_provider_strategy = {
             ASG = {
@@ -782,7 +782,7 @@ module "ecs" {
       load_balancer = {
         service = {
           target_group_arn = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
-          container_name   = "ecs-frontend"
+          container_name   = "ecs_frontend"
           container_port   = 3000
         }
       }
@@ -792,88 +792,88 @@ module "ecs" {
       availability_zone_rebalancing = "ENABLED"
     }
 
-    ecs-backend = {
-      cpu                    = 2048
-      memory                 = 4096
-      task_exec_iam_role_arn = module.ecs_task_execution_role.arn
-      iam_role_arn           = module.ecs_task_execution_role.arn
-      desired_count          = 2
-      assign_public_ip       = false
-      deployment_controller = {
-        type = "ECS"
-      }
-      network_mode = "awsvpc"
-      runtime_platform = {
-        cpu_architecture        = "X86_64"
-        operating_system_family = "LINUX"
-      }
-      launch_type              = "FARGATE"
-      scheduling_strategy      = "REPLICA"
-      requires_compatibilities = ["FARGATE"]
-      container_definitions = {
-        ecs-backend = {
-          cpu       = 1024
-          memory    = 2048
-          essential = true
-          image     = "${module.backend_container_registry.repository_url}:latest"
-          healthCheck = {
-            command = ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
-          }
-          ulimits = [
-            {
-              name      = "nofile"
-              softLimit = 65536
-              hardLimit = 65536
-            }
-          ]
-          environment = [
-            {
-              name  = "DB_PATH"
-              value = "${tostring(split(":", module.db.endpoint)[0])}"
-            },
-            {
-              name  = "DB_NAME"
-              value = "${module.db.name}"
-            }
-          ]
-          portMappings = [
-            {
-              name          = "ecs-backend"
-              containerPort = 80
-              hostPort      = 80
-              protocol      = "tcp"
-            }
-          ]
-          readOnlyRootFilesystem    = false
-          enable_cloudwatch_logging = false
-          logConfiguration = {
-            logDriver = "awslogs"
-            options = {
-              awslogs-group         = module.backend_ecs_log_group.name
-              awslogs-region        = var.region
-              awslogs-stream-prefix = "backend"
-            }
-          }
-          memoryReservation = 100
-          restartPolicy = {
-            enabled              = true
-            ignoredExitCodes     = [1]
-            restartAttemptPeriod = 60
-          }
-        }
-      }
-      load_balancer = {
-        service = {
-          target_group_arn = module.backend_lb.target_groups["backend_lb_target_group"].arn
-          container_name   = "ecs-backend"
-          container_port   = 80
-        }
-      }
-      subnet_ids                    = module.vpc.private_subnets
-      vpc_id                        = module.vpc.vpc_id
-      security_group_ids            = [module.ecs_backend_sg.id]
-      availability_zone_rebalancing = "ENABLED"
-    }
+    # ecs_backend = {
+    #   cpu                    = 2048
+    #   memory                 = 4096
+    #   task_exec_iam_role_arn = module.ecs_task_execution_role.arn
+    #   iam_role_arn           = module.ecs_task_execution_role.arn
+    #   desired_count          = 2
+    #   assign_public_ip       = false
+    #   deployment_controller = {
+    #     type = "ECS"
+    #   }
+    #   network_mode = "awsvpc"
+    #   runtime_platform = {
+    #     cpu_architecture        = "X86_64"
+    #     operating_system_family = "LINUX"
+    #   }
+    #   launch_type              = "FARGATE"
+    #   scheduling_strategy      = "REPLICA"
+    #   requires_compatibilities = ["FARGATE"]
+    #   container_definitions = {
+    #     ecs_backend = {
+    #       cpu       = 1024
+    #       memory    = 2048
+    #       essential = true
+    #       image     = "${module.backend_container_registry.repository_url}:latest"
+    #       healthCheck = {
+    #         command = ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
+    #       }
+    #       ulimits = [
+    #         {
+    #           name      = "nofile"
+    #           softLimit = 65536
+    #           hardLimit = 65536
+    #         }
+    #       ]
+    #       environment = [
+    #         {
+    #           name  = "DB_PATH"
+    #           value = "${tostring(split(":", module.db.endpoint)[0])}"
+    #         },
+    #         {
+    #           name  = "DB_NAME"
+    #           value = "${module.db.name}"
+    #         }
+    #       ]
+    #       portMappings = [
+    #         {
+    #           name          = "ecs_backend"
+    #           containerPort = 80
+    #           hostPort      = 80
+    #           protocol      = "tcp"
+    #         }
+    #       ]
+    #       readOnlyRootFilesystem    = false
+    #       enable_cloudwatch_logging = false
+    #       logConfiguration = {
+    #         logDriver = "awslogs"
+    #         options = {
+    #           awslogs-group         = module.backend_ecs_log_group.name
+    #           awslogs-region        = var.region
+    #           awslogs-stream-prefix = "backend"
+    #         }
+    #       }
+    #       memoryReservation = 100
+    #       restartPolicy = {
+    #         enabled              = true
+    #         ignoredExitCodes     = [1]
+    #         restartAttemptPeriod = 60
+    #       }
+    #     }
+    #   }
+    #   load_balancer = {
+    #     service = {
+    #       target_group_arn = module.backend_lb.target_groups["backend_lb_target_group"].arn
+    #       container_name   = "ecs_backend"
+    #       container_port   = 80
+    #     }
+    #   }
+    #   subnet_ids                    = module.vpc.private_subnets
+    #   vpc_id                        = module.vpc.vpc_id
+    #   security_group_ids            = [module.ecs_backend_sg.id]
+    #   availability_zone_rebalancing = "ENABLED"
+    # }
   }
 }
 
@@ -881,7 +881,7 @@ module "frontend_app_autoscaling_policy" {
   source             = "./modules/autoscaling"
   min_capacity       = 2
   max_capacity       = 10
-  resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs-frontend"].name}"
+  resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs_frontend"].name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
   policies = [
@@ -909,37 +909,37 @@ module "frontend_app_autoscaling_policy" {
   ]
 }
 
-module "backend_app_autoscaling_policy" {
-  source             = "./modules/autoscaling"
-  min_capacity       = 2
-  max_capacity       = 10
-  resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs-backend"].name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
-  policies = [
-    {
-      name        = "worker-scale-up"
-      policy_type = "TargetTrackingScaling"
-      step_scaling_policy_configuration = {
-        adjustment_type         = "ChangeInCapacity"
-        cooldown                = 60
-        metric_aggregation_type = "Average"
-        # min_adjustment_magnitude = 1
-        step_adjustment = [
-          {
-            metric_interval_lower_bound = 0
-            metric_interval_upper_bound = 20
-            scaling_adjustment          = 1
-          },
-          {
-            metric_interval_lower_bound = 20
-            scaling_adjustment          = 2
-          }
-        ]
-      }
-    }
-  ]
-}
+# module "backend_app_autoscaling_policy" {
+#   source             = "./modules/autoscaling"
+#   min_capacity       = 2
+#   max_capacity       = 10
+#   resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs_backend"].name}"
+#   scalable_dimension = "ecs:service:DesiredCount"
+#   service_namespace  = "ecs"
+#   policies = [
+#     {
+#       name        = "worker-scale-up"
+#       policy_type = "TargetTrackingScaling"
+#       step_scaling_policy_configuration = {
+#         adjustment_type         = "ChangeInCapacity"
+#         cooldown                = 60
+#         metric_aggregation_type = "Average"
+#         # min_adjustment_magnitude = 1
+#         step_adjustment = [
+#           {
+#             metric_interval_lower_bound = 0
+#             metric_interval_upper_bound = 20
+#             scaling_adjustment          = 1
+#           },
+#           {
+#             metric_interval_lower_bound = 20
+#             scaling_adjustment          = 2
+#           }
+#         ]
+#       }
+#     }
+#   ]
+# }
 
 # ---------------------------------------------------------------------
 # Bedrock Configuration
@@ -1072,13 +1072,13 @@ module "bedrock_agent" {
           If any security concerns are detected, reject the request politely.
           Otherwise, proceed to generate a safe, read-only SQL query.
         EOT
-        inference_configuration = {
+        inference_configuration = [{
           temperature    = 0.0
           top_p          = 0.9
           top_k          = 250
-          max_tokens     = 2048
+          max_length     = 2048
           stop_sequences = ["</sql>", "COMMIT;", "ROLLBACK;"]
-        }
+        }]
       },
       {
         prompt_type          = "ORCHESTRATION"
@@ -1096,13 +1096,14 @@ module "bedrock_agent" {
           
           Schema validation is mandatory before query generation.
         EOT
-        inference_configuration = {
+        inference_configuration = [{
           temperature    = 0.1
           top_p          = 0.95
           top_k          = 250
-          max_tokens     = 4096
+          max_length     = 4096
           stop_sequences = ["</answer>"]
-        }
+          }
+        ]
       },
       {
         prompt_type          = "POST_PROCESSING"
@@ -1121,13 +1122,13 @@ module "bedrock_agent" {
           - Any warnings or recommendations
           - Performance considerations
         EOT
-        inference_configuration = {
+        inference_configuration = [{
           temperature    = 0.0
           top_p          = 0.9
           top_k          = 250
-          max_tokens     = 2048
+          max_length     = 2048
           stop_sequences = []
-        }
+        }]
       }
     ]
   }
