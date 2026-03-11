@@ -1,40 +1,37 @@
 ARG NODE=node:18-alpine
 
-# Stage 1: Install dependencies
+# ─── Stage 1: Install dependencies ───────────────────────────────────────────
 FROM ${NODE} AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
 
-COPY package.json yarn.lock* ./
-RUN yarn --frozen-lockfile
-
-# Stage 2: Build the app
+# ─── Stage 2: Build ───────────────────────────────────────────────────────────
 FROM ${NODE} AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-RUN yarn build
+# Build-time env vars can be passed here
+ARG VITE_AWS_REGION
+ARG VITE_COGNITO_USER_POOL_ID
+ARG VITE_COGNITO_CLIENT_ID
+ARG VITE_API_BASE_URL
 
-# Stage 3: Run the production
-FROM ${NODE} AS runner
-WORKDIR /app
+ENV VITE_AWS_REGION=$VITE_AWS_REGION \
+    VITE_COGNITO_USER_POOL_ID=$VITE_COGNITO_USER_POOL_ID \
+    VITE_COGNITO_CLIENT_ID=$VITE_COGNITO_CLIENT_ID \
+    VITE_API_BASE_URL=$VITE_API_BASE_URL
 
-ENV NODE_ENV=production
+RUN npm run build
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# ─── Stage 3: Serve with nginx ────────────────────────────────────────────────
+FROM nginx:1.25-alpine AS runner
 
-# copy assets and the generated standalone server
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-USER nextjs
+EXPOSE 80
 
-EXPOSE 3000
-
-ENV PORT=3000
-
-# Serve the app
-CMD ["node", "server.js"]
+CMD ["nginx", "-g", "daemon off;"]

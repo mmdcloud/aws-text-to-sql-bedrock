@@ -699,12 +699,6 @@ module "backend_ecs_log_group" {
 module "ecs" {
   source       = "terraform-aws-modules/ecs/aws"
   cluster_name = "text-to-sql-cluster"
-  default_capacity_provider_strategy = {
-    FARGATE = {
-      weight = 100
-      base   = 1
-    }
-  }
   services = {
     ecs_frontend = {
       cpu                    = 2048
@@ -761,8 +755,7 @@ module "ecs" {
               weight            = 50
             }
           }
-          readonlyRootFilesystem    = false
-          enable_cloudwatch_logging = false
+          readonlyRootFilesystem = false
           logConfiguration = {
             logDriver = "awslogs"
             options = {
@@ -845,7 +838,6 @@ module "ecs" {
     #         }
     #       ]
     #       readOnlyRootFilesystem    = false
-    #       enable_cloudwatch_logging = false
     #       logConfiguration = {
     #         logDriver = "awslogs"
     #         options = {
@@ -875,6 +867,7 @@ module "ecs" {
     #   availability_zone_rebalancing = "ENABLED"
     # }
   }
+  depends_on = [module.cognito]
 }
 
 module "frontend_app_autoscaling_policy" {

@@ -1,27 +1,37 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Layout from './components/Layout';
-import Login from './pages/Login';
-import Signup from './pages/Signup';
-import Dashboard from './pages/Dashboard';
-import Upload from './pages/Upload';
-import MediaPlayer from './pages/MediaPlayer';
+import { Toaster } from 'react-hot-toast';
+import { AuthProvider } from './contexts/AuthContext';
+import AppRouter from './router/AppRouter';
+import './styles/globals.css';
+import './styles/animations.css';
 
-function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-        <Route path="/" element={<Layout />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="upload" element={<Upload />} />
-          <Route path="media-player" element={<MediaPlayer />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
-  );
-}
+const App = () => {
+    return (
+        <AuthProvider>
+            <AppRouter />
+            <Toaster
+                position="top-right"
+                toastOptions={{
+                    duration: 4000,
+                    style: {
+                        background: 'var(--bg-card)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-default)',
+                        borderRadius: '10px',
+                        fontFamily: 'var(--font-sans)',
+                        fontSize: '0.9rem',
+                        boxShadow: 'var(--shadow-lg)',
+                    },
+                    success: {
+                        iconTheme: { primary: '#10b981', secondary: '#fff' },
+                    },
+                    error: {
+                        iconTheme: { primary: '#ef4444', secondary: '#fff' },
+                    },
+                }}
+            />
+        </AuthProvider>
+    );
+};
 
 export default App;

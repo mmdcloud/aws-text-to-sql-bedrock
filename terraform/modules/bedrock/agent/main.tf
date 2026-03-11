@@ -20,11 +20,11 @@ resource "aws_bedrockagent_agent" "this" {
       dynamic "prompt_configurations" {
         for_each = prompt_override_configuration.value.prompt_configurations
         content {
-          prompt_type              = prompt_configurations.value.prompt_type
-          prompt_creation_mode     = prompt_configurations.value.prompt_creation_mode
-          prompt_state             = prompt_configurations.value.prompt_state
-          base_prompt_template     = prompt_configurations.value.base_prompt_template
-          inference_configuration  = prompt_configurations.value.inference_configuration
+          prompt_type             = prompt_configurations.value.prompt_type
+          prompt_creation_mode    = prompt_configurations.value.prompt_creation_mode
+          prompt_state            = prompt_configurations.value.prompt_state
+          base_prompt_template    = prompt_configurations.value.base_prompt_template
+          inference_configuration = prompt_configurations.value.inference_configuration
         }
       }
     }
@@ -34,7 +34,10 @@ resource "aws_bedrockagent_agent" "this" {
 }
 
 resource "aws_bedrockagent_agent_knowledge_base_association" "this" {
-  for_each = { for idx, kb in var.knowledge_bases : kb.knowledge_base_id => kb }
+  for_each = {
+    for idx, kb in var.knowledge_bases :
+    idx => kb
+  }
 
   agent_id             = aws_bedrockagent_agent.this.agent_id
   description          = each.value.description
@@ -43,7 +46,10 @@ resource "aws_bedrockagent_agent_knowledge_base_association" "this" {
 }
 
 resource "aws_bedrockagent_agent_action_group" "this" {
-  for_each = { for idx, ag in var.action_groups : ag.action_group_name => ag }
+  for_each = {
+    for idx, ag in var.action_groups :
+    idx => ag
+  }
 
   action_group_name          = each.value.action_group_name
   agent_id                   = aws_bedrockagent_agent.this.agent_id
