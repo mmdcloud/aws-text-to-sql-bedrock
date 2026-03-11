@@ -1619,6 +1619,23 @@ module "bedrock_guardrail" {
 #   skip_destroy  = true
 # }
 
+# -----------------------------------------------------------------------------
+# SNS Configuration
+# -----------------------------------------------------------------------------
+module "alarm_notifications" {
+  source     = "./modules/sns"
+  topic_name = "text-to-sql-cloudwatch-alarms"
+  subscriptions = [
+    {
+      protocol = "email"
+      endpoint = var.alarm_email # add to variables.tf
+    }
+  ]
+}
+
+# -----------------------------------------------------------------------------
+# Cloudwatch Alarm Configuration
+# -----------------------------------------------------------------------------
 module "frontend_lb_unhealthy_hosts" {
   source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "text-to-sql-frontend-lb-unhealthy-hosts"
