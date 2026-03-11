@@ -1618,3 +1618,609 @@ module "bedrock_guardrail" {
 #   guardrail_arn = aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_arn
 #   skip_destroy  = true
 # }
+
+module "frontend_lb_unhealthy_hosts" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-lb-unhealthy-hosts"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "UnHealthyHostCount"
+  namespace           = "AWS/ApplicationELB"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "0"
+  alarm_description   = "Frontend ECS targets failing health check at /auth/signin:3000. Tasks may be crash-looping, OOMing, or Cognito callback URL is unreachable."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
+    LoadBalancer = module.frontend_lb.arn
+  }
+}
+
+# 5XX errors — Bedrock InvokeModel failures or RDS errors surfacing to users
+module "frontend_lb_5xx_errors" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-lb-5xx-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = "60"
+  statistic           = "Sum"
+  threshold           = "10"
+  alarm_description   = "Frontend ECS returning 5XX. Likely Bedrock InvokeAgent/InvokeModel failures, RDS connection errors, or unhandled exceptions in the NL-to-SQL pipeline."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
+    LoadBalancer = module.frontend_lb.arn
+  }
+}
+
+# 4XX errors — Cognito token failures, expired OAuth sessions, invalid callback URLs
+module "frontend_lb_4xx_errors" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-lb-4xx-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "HTTPCode_Target_4XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = "60"
+  statistic           = "Sum"
+  threshold           = "50"
+  alarm_description   = "High 4XX from frontend targets. Likely Cognito token expiry, invalid callback URLs (http://<alb-dns>/callback), or misconfigured OAuth flows on the texttosql_client."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
+    LoadBalancer = module.frontend_lb.arn
+  }
+}
+
+# p95 response time — Bedrock claude-opus inference adds 5-8s; track end-to-end at ALB
+module "frontend_lb_high_response_time" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-lb-high-response-time"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "TargetResponseTime"
+  namespace           = "AWS/ApplicationELB"
+  period              = "60"
+  extended_statistic  = "p95"
+  statistic           = "Average"
+  threshold           = "10" # 10s — Bedrock claude-opus can take 5-8s alone
+  alarm_description   = "Frontend ALB p95 response time > 10s. Bedrock Agent InvokeAgent calls may be timing out, or RDS query execution is slow after SQL generation."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    LoadBalancer = module.frontend_lb.arn
+  }
+}
+
+# Request count surge — each request = one Bedrock InvokeAgent call = cost spike
+module "frontend_lb_request_surge" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-lb-request-surge"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "RequestCount"
+  namespace           = "AWS/ApplicationELB"
+  period              = "60"
+  statistic           = "Sum"
+  threshold           = "3000" # tune to traffic baseline
+  alarm_description   = "Frontend ALB request count abnormally high. Each request triggers a Bedrock InvokeAgent call — a traffic spike here translates directly to unexpected Bedrock token cost."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    LoadBalancer = module.frontend_lb.arn
+  }
+}
+
+# CPU — Bedrock response parsing + SQL execution is CPU-bound
+module "frontend_ecs_high_cpu" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-ecs-high-cpu"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "80"
+  alarm_description   = "Frontend ECS CPU > 80%. May indicate Bedrock response parsing load or concurrent SQL query execution. Check if autoscaling is reacting."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ClusterName = module.ecs.cluster_name
+    ServiceName = module.ecs.services["ecs_frontend"].name
+  }
+}
+
+# Memory — task is 4096 MB total, container 2048 MB
+module "frontend_ecs_high_memory" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-ecs-high-memory"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "MemoryUtilization"
+  namespace           = "AWS/ECS"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "80"
+  alarm_description   = "Frontend ECS memory > 80% (3276 MB of 4096 MB). Large Bedrock response payloads or connection pool leaks may cause OOM task restarts."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ClusterName = module.ecs.cluster_name
+    ServiceName = module.ecs.services["ecs_frontend"].name
+  }
+}
+
+# Running task count — desired=2, min_capacity=2; alert if either task is lost
+module "frontend_ecs_low_running_tasks" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-ecs-low-running-tasks"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "RunningTaskCount"
+  namespace           = "AWS/ECS"
+  period              = "60"
+  statistic           = "Minimum"
+  threshold           = "2"
+  alarm_description   = "Running task count dropped below desired minimum of 2. Service capacity is degraded — users may see 502s if traffic hits the single remaining task."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ClusterName = module.ecs.cluster_name
+    ServiceName = module.ecs.services["ecs_frontend"].name
+  }
+}
+
+# Failed deployments — broken ECR image or bad task definition blocks all future rollouts
+module "frontend_ecs_failed_deployments" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-ecs-failed-deployments"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "DeploymentFailures"
+  namespace           = "ECS/ContainerInsights"
+  period              = "60"
+  statistic           = "Sum"
+  threshold           = "0"
+  alarm_description   = "ECS deployment failed. New task definition could not start — likely ECR image pull failure, missing env var, or Secrets Manager access error on pinecone_api_key or rds_secrets."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ClusterName = module.ecs.cluster_name
+    ServiceName = module.ecs.services["ecs_frontend"].name
+  }
+}
+
+# Task restarts — restartPolicy.enabled=true; alert on crash-loop pattern
+module "frontend_ecs_task_restarts" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-frontend-ecs-task-restarts"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "TaskRestartCount"
+  namespace           = "ECS/ContainerInsights"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "3"
+  alarm_description   = "Frontend tasks restarting > 3x in 5 minutes. Check /aws/ecs/frontend-ecs log group for stack traces. Common causes: unhandled Bedrock exceptions, RDS connection failures, or missing Secrets Manager permissions."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ClusterName = module.ecs.cluster_name
+    ServiceName = module.ecs.services["ecs_frontend"].name
+  }
+}
+
+# CPU — t3.medium is burstable; 70%+ sustained burns credits rapidly
+module "rds_high_cpu" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-high-cpu"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "70"
+  alarm_description   = "RDS CPU > 70% on db.t3.medium (burstable). Sustained load burns T3 CPU credits. At credit exhaustion the instance drops to 20% baseline — SQL queries will time out and Bedrock Agent will return errors."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# CPU credit balance — THE most important metric for t3 burstable instances
+module "rds_low_cpu_credit_balance" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-low-cpu-credit-balance"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUCreditBalance"
+  namespace           = "AWS/RDS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "20"
+  alarm_description   = "RDS T3 CPU credit balance < 20. Instance will throttle to 20% baseline CPU imminently. This will cause severe latency in AI-generated SQL execution — Bedrock Agent response times will spike to 30s+."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# Free storage — initial 20 GB with autoscaling to 40 GB ceiling
+module "rds_low_storage" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-low-storage"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "FreeStorageSpace"
+  namespace           = "AWS/RDS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "5368709120" # 5 GB in bytes
+  alarm_description   = "RDS free storage < 5 GB. Storage autoscaling will expand up to 40 GB max. If usage is approaching the ceiling, plan manual scale-up — the max_allocated_storage cap of 40 GB will block autoscaling."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# Database connections — max_connections=1000 in params, but t3.medium (4 GB) safely handles ~80
+module "rds_high_connections" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-high-connections"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "DatabaseConnections"
+  namespace           = "AWS/RDS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "80"
+  alarm_description   = "RDS connection count > 80. Parameter group sets max=1000 but db.t3.medium (4 GB RAM) handles ~80 connections comfortably. Above this, memory pressure causes swapping. Check ECS task connection pool configuration."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# Freeable memory — db.t3.medium has only 4 GB; pressure here causes swapping
+module "rds_low_freeable_memory" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-low-freeable-memory"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "FreeableMemory"
+  namespace           = "AWS/RDS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "536870912" # 512 MB in bytes
+  alarm_description   = "RDS freeable memory < 512 MB on db.t3.medium (4 GB total). InnoDB buffer pool is evicting hot pages to disk. Consider enabling innodb_buffer_pool_size in the db-pg parameter group (currently commented out)."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# Read latency — Bedrock agent executes generated SQL synchronously; slow reads = slow agent
+module "rds_high_read_latency" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-high-read-latency"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "ReadLatency"
+  namespace           = "AWS/RDS"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "0.1" # 100ms
+  alarm_description   = "RDS read latency > 100ms. The Bedrock Agent executes generated SQL synchronously — slow reads add directly on top of claude-opus inference time. Users will see 15s+ total response times."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# Swap usage — any swap on a 4 GB instance indicates severe memory pressure
+module "rds_swap_usage" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-swap-usage"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "SwapUsage"
+  namespace           = "AWS/RDS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "268435456" # 256 MB in bytes
+  alarm_description   = "RDS is using swap on db.t3.medium. Any swap usage on a 4 GB instance indicates severe memory pressure and causes order-of-magnitude latency spikes on all queries the Bedrock agent executes."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# Replica lag — multi_az=true; standby lag risk during failover
+module "rds_replica_lag" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-rds-replica-lag"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "ReplicaLag"
+  namespace           = "AWS/RDS"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "30"
+  alarm_description   = "RDS Multi-AZ standby replica lag > 30s. A failover in this state risks data loss and may serve stale schema metadata to the Bedrock Knowledge Base sync from S3."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    DBInstanceIdentifier = module.db.name
+  }
+}
+
+# InvokeModel client errors — IAM permission issue or invalid model ID
+module "bedrock_invocation_client_errors" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-bedrock-client-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "InvocationClientErrors"
+  namespace           = "AWS/Bedrock"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "5"
+  alarm_description   = "Bedrock InvokeModel client errors > 5. Check: (1) texttosql_bedrock_agent_role has bedrock:InvokeModel on claude-opus ARN, (2) model ID matches exactly: anthropic.claude-opus-4-5-20251101-v1:0, (3) region supports claude-opus."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+  }
+}
+
+# InvokeModel server errors — AWS-side Bedrock issue
+module "bedrock_invocation_server_errors" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-bedrock-server-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "InvocationServerErrors"
+  namespace           = "AWS/Bedrock"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "3"
+  alarm_description   = "Bedrock server-side errors on claude-opus. AWS-side issue — check Bedrock service health. Your ECS app should implement exponential backoff retry; sustained errors indicate a regional Bedrock incident."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+  }
+}
+
+# InvokeModel throttles — Bedrock has per-account TPM limits; text-to-sql prompts are token-heavy
+module "bedrock_throttles" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-bedrock-throttles"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "InvocationThrottles"
+  namespace           = "AWS/Bedrock"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "5"
+  alarm_description   = "Bedrock InvokeModel throttled. Claude Opus has strict TPM limits. Text-to-SQL prompts with full schema context injected from the Pinecone knowledge base can be very token-heavy. Request a Bedrock quota increase if this fires regularly."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+  }
+}
+
+# Input token volume — cost signal; schema context injection can inflate tokens significantly
+module "bedrock_high_input_tokens" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-bedrock-high-input-tokens"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "InputTokenCount"
+  namespace           = "AWS/Bedrock"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "500000" # 500K tokens per 5 min — tune to baseline
+  alarm_description   = "Bedrock input token count spike. Claude Opus input is billed per token — a spike here means significant unexpected cost. Check if the Pinecone knowledge base is injecting oversized schema context into the PRE_PROCESSING or ORCHESTRATION prompts."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+  }
+}
+
+# Guardrail invocations — high block rate = users hitting safety limits or real attack traffic
+module "bedrock_guardrail_high_blocks" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-bedrock-guardrail-blocks"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "GuardrailInvocationCount"
+  namespace           = "AWS/Bedrock"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "20"
+  alarm_description   = "High Bedrock Guardrail invocation count on texttosql-guardrail. Possible SQL injection attempts (UNION/comment/stacked query patterns), users hitting denied topics (destructive_operations, privilege_escalation), or regex patterns firing on legitimate schema queries."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    GuardrailId = module.bedrock_guardrail.guardrail_id
+  }
+}
+
+# Sign-in successes drop — users can't authenticate; blocks entire app
+module "cognito_low_signin_successes" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-cognito-low-signin-successes"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "SignInSuccesses"
+  namespace           = "AWS/Cognito"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "1" # during business hours; set a schedule for off-hours suppression
+  alarm_description   = "Cognito sign-in successes have dropped to near zero. The Cognito callback_url is set to http://<alb-dns>/callback — if the ALB DNS changes or HTTP is blocked, all OAuth flows will fail silently."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    UserPool = module.cognito.user_pool_id
+  }
+}
+
+# Token refresh failures — users getting logged out mid-session
+module "cognito_token_refresh_failures" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-cognito-token-refresh-failures"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "TokenRefreshSuccesses"
+  namespace           = "AWS/Cognito"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "0"
+  alarm_description   = "Cognito token refresh activity anomaly. Users may be getting logged out prematurely. Verify logout_url http://<alb-dns>/logout still matches the deployed ALB DNS and the texttosql_client config."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions = {
+    UserPool = module.cognito.user_pool_id
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "secretsmanager_throttles" {
+  name           = "text-to-sql-secretsmanager-throttles"
+  log_group_name = "/aws/cloudtrail" # update to match your CloudTrail log group
+  pattern        = "{ ($.eventSource = \"secretsmanager.amazonaws.com\") && ($.errorCode = \"ThrottlingException\") }"
+
+  metric_transformation {
+    name      = "SecretsManagerThrottles"
+    namespace = "TextToSQL/SecretsManager"
+    value     = "1"
+  }
+}
+
+module "secretsmanager_throttle_alarm" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "text-to-sql-secretsmanager-throttles"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "SecretsManagerThrottles"
+  namespace           = "TextToSQL/SecretsManager"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "3"
+  alarm_description   = "Secrets Manager GetSecretValue is being throttled. ECS tasks fetch both rds_secrets and pinecone_api_key at cold start — throttles cause task startup failures and stall ECS deployments. Add caching in application code (cache for 5 minutes)."
+  alarm_actions       = [module.alarm_notifications.topic_arn]
+  ok_actions          = [module.alarm_notifications.topic_arn]
+  dimensions          = {}
+}
+
+# module "backend_lb_unhealthy_hosts" {
+#   source              = "./modules/cloudwatch/cloudwatch-alarm"
+#   alarm_name          = "text-to-sql-backend-lb-unhealthy-hosts"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = "2"
+#   metric_name         = "UnHealthyHostCount"
+#   namespace           = "AWS/ApplicationELB"
+#   period              = "60"
+#   statistic           = "Average"
+#   threshold           = "0"
+#   alarm_description   = "Backend ECS targets failing health check at /:80. Likely RDS connection failure, missing DB_PATH env var (${module.db.endpoint}), or Secrets Manager access error on rds_secrets."
+#   alarm_actions       = [module.alarm_notifications.topic_arn]
+#   ok_actions          = [module.alarm_notifications.topic_arn]
+#   dimensions = {
+#     TargetGroup  = module.backend_lb.target_groups["backend_lb_target_group"].arn
+#     LoadBalancer = module.backend_lb.arn
+#   }
+# }
+
+# module "backend_lb_5xx_errors" {
+#   source              = "./modules/cloudwatch/cloudwatch-alarm"
+#   alarm_name          = "text-to-sql-backend-lb-5xx-errors"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = "1"
+#   metric_name         = "HTTPCode_Target_5XX_Count"
+#   namespace           = "AWS/ApplicationELB"
+#   period              = "60"
+#   statistic           = "Sum"
+#   threshold           = "10"
+#   alarm_description   = "Backend ECS returning 5XX. Check for RDS connection pool exhaustion, unhandled exceptions in SQL execution layer, or Bedrock InvokeModel failures propagating through."
+#   alarm_actions       = [module.alarm_notifications.topic_arn]
+#   ok_actions          = [module.alarm_notifications.topic_arn]
+#   dimensions = {
+#     TargetGroup  = module.backend_lb.target_groups["backend_lb_target_group"].arn
+#     LoadBalancer = module.backend_lb.arn
+#   }
+# }
+
+# module "backend_ecs_high_cpu" {
+#   source              = "./modules/cloudwatch/cloudwatch-alarm"
+#   alarm_name          = "text-to-sql-backend-ecs-high-cpu"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = "2"
+#   metric_name         = "CPUUtilization"
+#   namespace           = "AWS/ECS"
+#   period              = "60"
+#   statistic           = "Average"
+#   threshold           = "80"
+#   alarm_description   = "Backend ECS CPU > 80%. May indicate large result sets being serialized or connection pool thrashing."
+#   alarm_actions       = [module.alarm_notifications.topic_arn]
+#   ok_actions          = [module.alarm_notifications.topic_arn]
+#   dimensions = {
+#     ClusterName = module.ecs.cluster_name
+#     ServiceName = module.ecs.services["ecs_backend"].name
+#   }
+# }
+
+# module "backend_ecs_high_memory" {
+#   source              = "./modules/cloudwatch/cloudwatch-alarm"
+#   alarm_name          = "text-to-sql-backend-ecs-high-memory"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = "2"
+#   metric_name         = "MemoryUtilization"
+#   namespace           = "AWS/ECS"
+#   period              = "60"
+#   statistic           = "Average"
+#   threshold           = "80"
+#   alarm_description   = "Backend ECS memory > 80%. Large SQL result sets buffered before returning to frontend. Consider streaming results or paginating at the backend layer."
+#   alarm_actions       = [module.alarm_notifications.topic_arn]
+#   ok_actions          = [module.alarm_notifications.topic_arn]
+#   dimensions = {
+#     ClusterName = module.ecs.cluster_name
+#     ServiceName = module.ecs.services["ecs_backend"].name
+#   }
+# }
+
+# module "backend_ecs_task_restarts" {
+#   source              = "./modules/cloudwatch/cloudwatch-alarm"
+#   alarm_name          = "text-to-sql-backend-ecs-task-restarts"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = "1"
+#   metric_name         = "TaskRestartCount"
+#   namespace           = "ECS/ContainerInsights"
+#   period              = "300"
+#   statistic           = "Sum"
+#   threshold           = "3"
+#   alarm_description   = "Backend tasks restarting > 3x in 5 minutes. Check /aws/ecs/backend-ecs log group for stack traces — likely RDS connection failures or unhandled SQL exceptions."
+#   alarm_actions       = [module.alarm_notifications.topic_arn]
+#   ok_actions          = [module.alarm_notifications.topic_arn]
+#   dimensions = {
+#     ClusterName = module.ecs.cluster_name
+#     ServiceName = module.ecs.services["ecs_backend"].name
+#   }
+# }
