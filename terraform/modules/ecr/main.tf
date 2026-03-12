@@ -10,9 +10,7 @@ resource "aws_ecr_repository" "repository" {
     encryption_type = var.encryption_type
     kms_key         = var.kms_key == "AES256" ? null : var.kms_key
   }
-  tags = {
-    Name = var.name
-  }
+  tags = concat({},var.tags)
 }
 
 resource "aws_ecr_lifecycle_policy" "lifecycle_policy" {

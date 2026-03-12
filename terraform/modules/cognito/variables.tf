@@ -29,3 +29,7 @@ variable "user_pool_clients" {
     supported_identity_providers         = list(string)
   }))
 }
+variable "tags" {
+  type    = map(string)
+  default = {}
+}

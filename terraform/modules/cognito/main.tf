@@ -24,6 +24,7 @@ resource "aws_cognito_user_pool" "user_pool" {
     email_subject        = var.verification_email_subject
     email_message        = var.verification_email_message
   }
+  tags = concat({},var.tags)
 }
 
 # Cognito User Pool Client

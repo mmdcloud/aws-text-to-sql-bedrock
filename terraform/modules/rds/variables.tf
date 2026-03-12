@@ -30,3 +30,7 @@ variable "enabled_cloudwatch_logs_exports" {
   type = list(string)
   default = []
 }
+variable "tags" {
+  type    = map(string)
+  default = {}
+}

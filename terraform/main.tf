@@ -40,7 +40,9 @@ module "vpc" {
   single_nat_gateway      = false
   one_nat_gateway_per_az  = true
   tags = {
-    Project = "text-to-sql"
+    Name      = "vpc"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
 }
 
@@ -76,7 +78,9 @@ module "frontend_lb_sg" {
     }
   ]
   tags = {
-    Name = "frontend-lb-sg"
+    Name      = "frontend-lb-sg"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
 }
 
@@ -112,7 +116,9 @@ module "backend_lb_sg" {
     }
   ]
   tags = {
-    Name = "backend-lb-sg"
+    Name      = "backend-lb-sg"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
 }
 
@@ -139,7 +145,9 @@ module "ecs_frontend_sg" {
     }
   ]
   tags = {
-    Name = "ecs-frontend-sg"
+    Name      = "ecs-frontend-sg"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
 }
 
@@ -166,7 +174,9 @@ module "ecs_backend_sg" {
     }
   ]
   tags = {
-    Name = "ecs-backend-sg"
+    Name      = "ecs-backend-sg"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
 }
 
@@ -193,7 +203,9 @@ module "rds_sg" {
     }
   ]
   tags = {
-    Name = "rds-sg"
+    Name      = "rds-sg"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
 }
 
@@ -240,23 +252,33 @@ module "cognito" {
 # -----------------------------------------------------------------------------------------
 module "db_credentials" {
   source                  = "./modules/secrets-manager"
-  name                    = "rds_secrets"
+  name                    = "rds-secrets"
   description             = "rds_secrets"
   recovery_window_in_days = 0
   secret_string = jsonencode({
     username = tostring(data.vault_generic_secret.rds.data["username"])
     password = tostring(data.vault_generic_secret.rds.data["password"])
   })
+  tags = {
+    Name      = "rds-secrets"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 module "pinecone_api_key" {
   source                  = "./modules/secrets-manager"
-  name                    = "pinecone_api_key"
+  name                    = "pinecone-api-key"
   description             = "pinecone_api_key"
   recovery_window_in_days = 0
   secret_string = jsonencode({
     api_key = tostring(data.vault_generic_secret.pinecone.data["api_key"])
   })
+  tags = {
+    Name      = "pinecone-api-key"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 # -----------------------------------------------------------------------------------------
@@ -283,6 +305,11 @@ module "bedrock_knowledge_base_data_source" {
   ]
   versioning_enabled = "Enabled"
   force_destroy      = true
+  tags = {
+    Name      = "bedrock-knowledge-base-data-source"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 module "frontend_lb_logs" {
@@ -337,6 +364,11 @@ module "frontend_lb_logs" {
   ]
   versioning_enabled = "Enabled"
   force_destroy      = true
+  tags = {
+    Name      = "frontend-lb-logs"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 # module "backend_lb_logs" {
@@ -391,6 +423,11 @@ module "frontend_lb_logs" {
 #   ]
 #   versioning_enabled = "Enabled"
 #   force_destroy      = true
+#   tags = {
+#     Name      = "backend-lb-logs"
+#     ManagedBy = "terraform"
+#     Project   = "text-to-sql"
+#   }
 # }
 
 # -----------------------------------------------------------------------------------------
@@ -433,6 +470,11 @@ module "frontend_container_registry" {
       }
     ]
   })
+  tags = {
+    Name      = "frontend-td"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 # module "backend_container_registry" {
@@ -472,6 +514,11 @@ module "frontend_container_registry" {
 #       }
 #     ]
 #   })
+#   tags = {
+#     Name      = "backend-td"
+#     ManagedBy = "terraform"
+#     Project   = "text-to-sql"
+#   }
 # }
 
 # ---------------------------------------------------------------------
@@ -520,6 +567,11 @@ module "db" {
     #   value = "1"
     # }
   ]
+  tags = {
+    Name      = "db"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 # -----------------------------------------------------------------------------------------
@@ -568,7 +620,9 @@ module "frontend_lb" {
     }
   }
   tags = {
-    Project = "text-to-sql-frontend-lb"
+    Name      = "frontend-lb"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
 }
 
@@ -615,7 +669,9 @@ module "frontend_lb" {
 #     }
 #   }
 #   tags = {
-#     Project = "text-to-sql-backend-lb"
+#     Name      = "backend-lb"
+#     ManagedBy = "terraform"
+#     Project   = "text-to-sql"
 #   }
 # }
 
@@ -676,6 +732,11 @@ module "ecs_task_execution_role" {
         ]
     }
     EOF
+  tags = {
+    Name      = "ecs-task-execution-role"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 # ECR-ECS policy attachment 
@@ -866,6 +927,11 @@ module "ecs" {
     #   security_group_ids            = [module.ecs_backend_sg.id]
     #   availability_zone_rebalancing = "ENABLED"
     # }
+  }
+  tags = {
+    Name      = "texttosql-ecs-cluster"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
   }
   depends_on = [module.cognito]
 }
@@ -1127,9 +1193,10 @@ module "bedrock_agent" {
   }
 
   tags = {
+    Name      = "texttosql-agent"
     Project   = "text-to-sql"
-    ManagedBy = "Terraform"
-    Security  = "Guardrails-Enabled"
+    ManagedBy = "terraform"
+    Purpose   = "SQL-Safety-Guardrails"
   }
 }
 
@@ -1167,8 +1234,10 @@ module "bedrock_knowledge_base" {
   ]
 
   tags = {
+    Name      = "texttosql-knowledge-base"
     Project   = "text-to-sql"
-    ManagedBy = "Terraform"
+    ManagedBy = "terraform"
+    Purpose   = "SQL-Safety-Guardrails"
   }
 }
 
@@ -1493,131 +1562,12 @@ module "bedrock_guardrail" {
   ]
 
   tags = {
+    Name      = "texttosql-guardrail"
     Project   = "text-to-sql"
-    ManagedBy = "Terraform"
+    ManagedBy = "terraform"
     Purpose   = "SQL-Safety-Guardrails"
   }
 }
-
-# resource "aws_bedrockagent_agent" "texttosql_bedrock_agent" {
-#   agent_name                  = "texttosql-bedrock-agent"
-#   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
-#   idle_session_ttl_in_seconds = 500
-#   foundation_model            = "anthropic.claude-opus-4-5-20251101-v1:0"
-#   guardrail_configuration = [{
-#     guardrail_identifier = "${aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_id}"
-#     guardrail_version    = "${aws_bedrock_guardrail_version.guardrail_version.version}"
-#   }]
-# }
-
-# resource "aws_bedrockagent_knowledge_base" "texttosql_bedrock_agent_knowledge_base" {
-#   name     = "texttosql-bedrock-agent-knowledge-base"
-#   role_arn = aws_iam_role.texttosql_bedrock_agent_role.arn
-#   knowledge_base_configuration {
-#     vector_knowledge_base_configuration {
-#       embedding_model_arn = "arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0"
-#     }
-#     type = "VECTOR"
-#   }
-#   storage_configuration {
-#     type = "PINECONE"
-#     pinecone_configuration {
-#       connection_string      = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
-#       credentials_secret_arn = module.pinecone_api_key.arn
-#       namespace              = "__default__"
-#       field_mapping {
-#         text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
-#         metadata_field = "AMAZON_BEDROCK_METADATA"
-#       }
-#     }
-#   }
-# }
-
-# resource "aws_bedrockagent_data_source" "texttosql_bedrock_agent_data_source" {
-#   knowledge_base_id = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
-#   name              = "texttosql-bedrock-agent-data-source"
-#   description       = "TextToSQL Bedrock Agent Data Source"
-#   data_source_configuration {
-#     type = "S3"
-#     s3_configuration {
-#       bucket_arn = module.bedrock_knowledge_base_data_source.arn
-#     }
-#   }
-# }
-
-# resource "aws_bedrockagent_agent_knowledge_base_association" "texttosql_bedrock_agent_knowledge_base_association" {
-#   agent_id             = aws_bedrockagent_agent.texttosql_bedrock_agent.agent_id
-#   description          = "texttosql-bedrock-agent-knowledge-base-association"
-#   knowledge_base_id    = aws_bedrockagent_knowledge_base.texttosql_bedrock_agent_knowledge_base.id
-#   knowledge_base_state = "ENABLED"
-# }
-
-# resource "aws_bedrock_guardrail" "texttosql_bedrock_agent_guardrail" {
-#   name                      = "example"
-#   blocked_input_messaging   = "example"
-#   blocked_outputs_messaging = "example"
-#   description               = "example"
-
-#   content_policy_config {
-#     filters_config {
-#       input_strength  = "MEDIUM"
-#       output_strength = "MEDIUM"
-#       type            = "HATE"
-#     }
-#     tier_config {
-#       tier_name = "STANDARD"
-#     }
-#   }
-
-#   sensitive_information_policy_config {
-#     pii_entities_config {
-#       action         = "BLOCK"
-#       input_action   = "BLOCK"
-#       output_action  = "ANONYMIZE"
-#       input_enabled  = true
-#       output_enabled = true
-#       type           = "NAME"
-#     }
-
-#     regexes_config {
-#       action         = "BLOCK"
-#       input_action   = "BLOCK"
-#       output_action  = "BLOCK"
-#       input_enabled  = true
-#       output_enabled = false
-#       description    = "example regex"
-#       name           = "regex_example"
-#       pattern        = "^\\d{3}-\\d{2}-\\d{4}$"
-#     }
-#   }
-
-#   topic_policy_config {
-#     topics_config {
-#       name       = "investment_topic"
-#       examples   = ["Where should I invest my money ?"]
-#       type       = "DENY"
-#       definition = "Investment advice refers to inquiries, guidance, or recommendations regarding the management or allocation of funds or assets with the goal of generating returns ."
-#     }
-#     tier_config {
-#       tier_name = "CLASSIC"
-#     }
-#   }
-
-#   word_policy_config {
-#     managed_word_lists_config {
-#       type = "PROFANITY"
-#     }
-#     words_config {
-#       text = "HATE"
-#     }
-#   }
-# }
-
-# resource "aws_bedrock_guardrail_version" "guardrail_version" {
-#   description   = "example"
-#   guardrail_arn = aws_bedrock_guardrail.texttosql_bedrock_agent_guardrail.guardrail_arn
-#   skip_destroy  = true
-# }
 
 # -----------------------------------------------------------------------------
 # SNS Configuration
@@ -1631,6 +1581,11 @@ module "alarm_notifications" {
       endpoint = var.alarm_email # add to variables.tf
     }
   ]
+  tags = {
+    Name      = "text-to-sql-cloudwatch-alarms"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
 }
 
 # -----------------------------------------------------------------------------
