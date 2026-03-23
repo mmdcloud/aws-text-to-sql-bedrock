@@ -18,13 +18,14 @@ const AppRouter = () => {
                 <Route path="/signup" element={<SignupPage />} />
                 <Route path="/confirm-signup" element={<ConfirmSignupPage />} />
                 <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-
+                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/knowledge-base" element={<KnowledgeBasePage />} />
                 {/* Protected Routes */}
                 <Route element={<ProtectedRoute />}>
                     <Route element={<AppShell />}>
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                        <Route path="/dashboard" element={<DashboardPage />} />
-                        <Route path="/knowledge-base" element={<KnowledgeBasePage />} />
+                        
+                        
                     </Route>
                 </Route>
 

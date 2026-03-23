@@ -17,6 +17,16 @@ import {
     confirmResetPassword,
     resendSignUpCode,
 } from 'aws-amplify/auth';
+
+import {
+    CognitoIdentityProviderClient,
+    InitiateAuthCommand,
+    SignUpCommand,
+    ConfirmSignUpCommand,
+    ForgotPasswordCommand,
+    ConfirmForgotPasswordCommand,
+    AuthFlowType,
+} from "@aws-sdk/client-cognito-identity-provider";
 import type { User } from '../types';
 
 // ─── Context Shape ──────────────────────────────────────────────────────────────
@@ -31,6 +41,58 @@ interface AuthContextType {
     resendCode: (email: string) => Promise<void>;
     forgotPassword: (email: string) => Promise<void>;
     resetForgotPassword: (email: string, code: string, newPassword: string) => Promise<void>;
+}
+
+interface CognitoConfig {
+    region: string;
+    clientId: string;
+    userPoolId?: string; // optional – only needed for admin flows
+}
+
+function createClient(config: CognitoConfig): CognitoIdentityProviderClient {
+    return new CognitoIdentityProviderClient({ region: config.region });
+}
+
+// ---------------------------------------------------------------------------
+// Return types
+// ---------------------------------------------------------------------------
+
+export interface AuthResult {
+    accessToken: string;
+    idToken: string;
+    refreshToken: string;
+    expiresIn: number;
+    tokenType: string;
+}
+
+export interface AuthResponse {
+    success: boolean;
+    data?: AuthResult;
+    error?: string;
+}
+
+export interface SignUpResponse {
+    success: boolean;
+    userSub?: string;          // UUID assigned by Cognito
+    confirmed?: boolean;       // true if auto-confirmed
+    error?: string;
+}
+
+export interface ConfirmSignUpResponse {
+    success: boolean;
+    error?: string;
+}
+
+export interface ForgotPasswordResponse {
+    success: boolean;
+    deliveryMedium?: string;   // "EMAIL" | "SMS"
+    destination?: string;      // masked destination, e.g. "j***@example.com"
+    error?: string;
+}
+
+export interface ResetPasswordResponse {
+    success: boolean;
+    error?: string;
 }
 
 // ─── Context ────────────────────────────────────────────────────────────────────
@@ -63,7 +125,39 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         loadUser();
     }, [loadUser]);
 
-    const login = async (email: string, password: string) => {
+    const login = async (email: string, password: string,config: CognitoConfig,) => {
+        try {
+            const client = createClient(config);
+            const command = new InitiateAuthCommand({
+                AuthFlow: AuthFlowType.USER_PASSWORD_AUTH,
+                ClientId: config.clientId,
+                AuthParameters: {
+                    USERNAME: email,
+                    PASSWORD: password,
+                },
+            });
+
+            const response = await client.send(command);
+            const result = response.AuthenticationResult;
+
+            if (!result?.AccessToken || !result.IdToken || !result.RefreshToken) {
+                return { success: false, error: "Incomplete authentication result from Cognito." };
+            }
+
+            return {
+                success: true,
+                data: {
+                    accessToken: result.AccessToken,
+                    idToken: result.IdToken,
+                    refreshToken: result.RefreshToken,
+                    expiresIn: result.ExpiresIn ?? 3600,
+                    tokenType: result.TokenType ?? "Bearer",
+                },
+            };
+        }
+        catch (err: unknown) {
+            return { success: false, error: getErrorMessage(err) };
+        }
         const result = await signIn({ username: email, password });
         if (result.isSignedIn) {
             await loadUser();
@@ -75,7 +169,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser(null);
     };
 
-    const register = async (name: string, email: string, password: string) => {
+    const register = async (name: string, email: string, password: string,config: CognitoConfig,extraAttrs: Record<string, string> = {}) => {
+
+        const client = createClient(config);
+
+        const userAttributes = [
+            { Name: "email", Value: email },
+            ...Object.entries(extraAttrs).map(([Name, Value]) => ({ Name, Value })),
+        ];
+
+        try {
+            const command = new SignUpCommand({
+                ClientId: config.clientId,
+                Username: email,
+                Password: password,
+                UserAttributes: userAttributes,
+            });
+
+            const response = await client.send(command);
+
+            return {
+                success: true,
+                userSub: response.UserSub,
+                confirmed: response.UserConfirmed ?? false,
+            };
+        } catch (err: unknown) {
+            return { success: false, error: getErrorMessage(err) };
+        }
         await signUp({
             username: email,
             password,
@@ -85,7 +205,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         });
     };
 
-    const confirmRegistration = async (email: string, code: string) => {
+    const confirmRegistration = async (email: string, code: string,config: CognitoConfig,) => {
+        const client = createClient(config);
+
+        try {
+            const command = new ConfirmSignUpCommand({
+                ClientId: config.clientId,
+                Username: email,
+                ConfirmationCode: code,
+            });
+
+            await client.send(command);
+
+            return { success: true };
+        } catch (err: unknown) {
+            return { success: false, error: getErrorMessage(err) };
+        }
         await confirmSignUp({ username: email, confirmationCode: code });
     };
 
@@ -93,11 +228,46 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         await resendSignUpCode({ username: email });
     };
 
-    const forgotPassword = async (email: string) => {
+    const forgotPassword = async (email: string,config: CognitoConfig,) => {
+        const client = createClient(config);
+
+        try {
+            const command = new ForgotPasswordCommand({
+                ClientId: config.clientId,
+                Username: email,
+            });
+
+            const response = await client.send(command);
+            const delivery = response.CodeDeliveryDetails;
+
+            return {
+                success: true,
+                deliveryMedium: delivery?.DeliveryMedium,
+                destination: delivery?.Destination,
+            };
+        } catch (err: unknown) {
+            return { success: false, error: getErrorMessage(err) };
+        }
         await resetPassword({ username: email });
     };
 
-    const resetForgotPassword = async (email: string, code: string, newPassword: string) => {
+    const resetForgotPassword = async (email: string, code: string, newPassword: string,config: CognitoConfig,) => {
+        const client = createClient(config);
+
+        try {
+            const command = new ConfirmForgotPasswordCommand({
+                ClientId: config.clientId,
+                Username: email,
+                ConfirmationCode: code,
+                Password: newPassword,
+            });
+
+            await client.send(command);
+
+            return { success: true };
+        } catch (err: unknown) {
+            return { success: false, error: getErrorMessage(err) };
+        }
         await confirmResetPassword({ username: email, confirmationCode: code, newPassword });
     };
 
@@ -120,6 +290,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         </AuthContext.Provider>
     );
 };
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return "An unknown error occurred.";
+}
 
 // ─── Hook ────────────────────────────────────────────────────────────────────────
 export const useAuth = (): AuthContextType => {
