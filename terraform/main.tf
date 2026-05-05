@@ -385,7 +385,7 @@ module "backend_lb_logs" {
           Service = "logging.s3.amazonaws.com"
         }
         Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
+        Resource = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}/*"
       },
       {
         Sid    = "AWSLogDeliveryAclCheck"
@@ -394,7 +394,7 @@ module "backend_lb_logs" {
           Service = "logging.s3.amazonaws.com"
         }
         Action   = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}"
+        Resource = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}"
       },
       {
         Sid    = "AWSELBAccountWrite"
@@ -403,7 +403,7 @@ module "backend_lb_logs" {
           AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
         }
         Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random.id.hex}/*"
+        Resource = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}/*"
       }
     ]
   })
@@ -728,7 +728,7 @@ module "ecs_task_execution_role" {
                 ],
                 "Resource": "*",
                 "Effect": "Allow"
-            },
+            }
         ]
     }
     EOF
@@ -898,7 +898,7 @@ module "ecs" {
               protocol      = "tcp"
             }
           ]
-          readOnlyRootFilesystem    = false
+          readonlyRootFilesystem    = false
           logConfiguration = {
             logDriver = "awslogs"
             options = {
@@ -946,7 +946,7 @@ module "frontend_app_autoscaling_policy" {
   policies = [
     {
       name        = "worker-scale-up"
-      policy_type = "TargetTrackingScaling"
+      policy_type = "StepScaling"
       step_scaling_policy_configuration = {
         adjustment_type         = "ChangeInCapacity"
         cooldown                = 60
