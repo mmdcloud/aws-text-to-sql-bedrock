@@ -898,7 +898,7 @@ module "ecs" {
               protocol      = "tcp"
             }
           ]
-          readonlyRootFilesystem    = false
+          readonlyRootFilesystem = false
           logConfiguration = {
             logDriver = "awslogs"
             options = {
