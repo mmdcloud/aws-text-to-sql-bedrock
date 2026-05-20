@@ -4,3 +4,5 @@ private_subnets  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
 database_subnets = ["10.0.7.0/24", "10.0.8.0/24", "10.0.9.0/24"]
 azs              = ["us-east-1a", "us-east-1b", "us-east-1c"]
 alarm_email      = "madmaxcloudonline@gmail.com"
+pinecone_connection_string = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
+domain_name = "mohitcloud.xyz"

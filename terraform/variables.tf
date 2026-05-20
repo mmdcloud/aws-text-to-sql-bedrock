@@ -26,3 +26,14 @@ variable "alarm_email" {
   type        = string
   description = "Alarm Email"
 }
+
+variable "domain_name" {
+  type        = string
+  description = "Domain Name"
+}
+
+variable "pinecone_connection_string" {
+  type        = string
+  description = "Pinecone index connection string"
+  sensitive   = true
+}

@@ -254,7 +254,7 @@ module "db_credentials" {
   source                  = "./modules/secrets-manager"
   name                    = "rds-secrets"
   description             = "rds_secrets"
-  recovery_window_in_days = 0
+  recovery_window_in_days = 0 # Should not be 0 in production
   secret_string = jsonencode({
     username = tostring(data.vault_generic_secret.rds.data["username"])
     password = tostring(data.vault_generic_secret.rds.data["password"])
@@ -270,7 +270,7 @@ module "pinecone_api_key" {
   source                  = "./modules/secrets-manager"
   name                    = "pinecone-api-key"
   description             = "pinecone_api_key"
-  recovery_window_in_days = 0
+  recovery_window_in_days = 0 # Should not be 0 in production
   secret_string = jsonencode({
     api_key = tostring(data.vault_generic_secret.pinecone.data["api_key"])
   })
@@ -291,20 +291,20 @@ module "bedrock_knowledge_base_data_source" {
   bucket_policy = ""
   cors = [
     {
-      allowed_headers = ["*"]
+      allowed_headers = ["Authorization", "Content-Type"]
       allowed_methods = ["GET"]
-      allowed_origins = ["*"]
+      allowed_origins = ["https://${var.domain_name}"] # was ["*"]
       max_age_seconds = 3000
     },
     {
-      allowed_headers = ["*"]
+      allowed_headers = ["Authorization", "Content-Type"]
       allowed_methods = ["PUT"]
-      allowed_origins = ["*"]
+      allowed_origins = ["https://${var.domain_name}"] # was ["*"]
       max_age_seconds = 3000
     }
   ]
   versioning_enabled = "Enabled"
-  force_destroy      = true
+  force_destroy      = true # Make it false in production
   tags = {
     Name      = "bedrock-knowledge-base-data-source"
     ManagedBy = "terraform"
@@ -363,7 +363,7 @@ module "frontend_lb_logs" {
     }
   ]
   versioning_enabled = "Enabled"
-  force_destroy      = true
+  force_destroy      = true # Make it false in production
   tags = {
     Name      = "frontend-lb-logs"
     ManagedBy = "terraform"
@@ -422,7 +422,7 @@ module "backend_lb_logs" {
     }
   ]
   versioning_enabled = "Enabled"
-  force_destroy      = true
+  force_destroy      = true # Make it false in production
   tags = {
     Name      = "backend-lb-logs"
     ManagedBy = "terraform"
@@ -436,7 +436,7 @@ module "backend_lb_logs" {
 module "frontend_container_registry" {
   source               = "./modules/ecr"
   force_delete         = true
-  scan_on_push         = false
+  scan_on_push         = false # Make it true in production 
   image_tag_mutability = "IMMUTABLE"
   bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region}"
   name                 = "frontend-td"
@@ -480,7 +480,7 @@ module "frontend_container_registry" {
 module "backend_container_registry" {
   source               = "./modules/ecr"
   force_delete         = true
-  scan_on_push         = false
+  scan_on_push         = false # Make it true in production 
   image_tag_mutability = "IMMUTABLE"
   bash_command         = "bash ${path.cwd}/../src/backend/artifact_push.sh backend-td ${var.region}"
   name                 = "backend-td"
@@ -546,8 +546,8 @@ module "db" {
   ]
   vpc_security_group_ids                = [module.rds_sg.id]
   publicly_accessible                   = false
-  deletion_protection                   = false
-  skip_final_snapshot                   = true
+  deletion_protection                   = false # Make it true in production
+  skip_final_snapshot                   = true  # Make it false in production . 'final_snapshot_identifier' field is needed if false
   max_allocated_storage                 = 40
   performance_insights_enabled          = true
   performance_insights_retention_period = 7
@@ -556,16 +556,16 @@ module "db" {
   parameters = [
     {
       name  = "max_connections"
-      value = "1000"
+      value = "100" 
+    },
+    {
+      name  = "innodb_buffer_pool_size"
+      value = "{DBInstanceClassMemory*3/4}"
+    },
+    {
+      name  = "slow_query_log"
+      value = "1"
     }
-    # {
-    #   name  = "innodb_buffer_pool_size"
-    #   value = "{DBInstanceClassMemory*3/4}"
-    # },
-    # {
-    #   name  = "slow_query_log"
-    #   value = "1"
-    # }
   ]
   tags = {
     Name      = "db"
@@ -704,10 +704,12 @@ module "ecs_task_execution_role" {
         "Version": "2012-10-17",
         "Statement": [
             {
-                "Action": [
-                  "s3:PutObject"
+                "Action": ["s3:PutObject"],
+                "Resource": [
+                  "${module.frontend_lb_logs.arn}/*",
+                  "${module.backend_lb_logs.arn}/*",
+                  "${module.bedrock_knowledge_base_data_source.arn}/*"
                 ],
-                "Resource": "*",
                 "Effect": "Allow"
             },
             {
@@ -726,7 +728,10 @@ module "ecs_task_execution_role" {
                   "bedrock:InvokeAgent",
                   "bedrock:InvokeModel"
                 ],
-                "Resource": "*",
+                "Resource": [
+                  "arn:aws:bedrock:${var.region}::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
+                  "${module.bedrock_agent.agent_arn}"
+                ],
                 "Effect": "Allow"
             }
         ]
@@ -828,7 +833,7 @@ module "ecs" {
           memoryReservation = 100
           restartPolicy = {
             enabled              = true
-            ignoredExitCodes     = [1]
+            ignoredExitCodes     = []
             restartAttemptPeriod = 60
           }
         }
@@ -910,7 +915,7 @@ module "ecs" {
           memoryReservation = 100
           restartPolicy = {
             enabled              = true
-            ignoredExitCodes     = [1]
+            ignoredExitCodes     = []
             restartAttemptPeriod = 60
           }
         }
@@ -979,22 +984,13 @@ module "backend_app_autoscaling_policy" {
     {
       name        = "worker-scale-up"
       policy_type = "TargetTrackingScaling"
-      step_scaling_policy_configuration = {
-        adjustment_type         = "ChangeInCapacity"
-        cooldown                = 60
-        metric_aggregation_type = "Average"
-        # min_adjustment_magnitude = 1
-        step_adjustment = [
-          {
-            metric_interval_lower_bound = 0
-            metric_interval_upper_bound = 20
-            scaling_adjustment          = 1
-          },
-          {
-            metric_interval_lower_bound = 20
-            scaling_adjustment          = 2
-          }
-        ]
+      target_tracking_scaling_policy_configuration = {
+        target_value       = 60.0 # scale when avg CPU hits 60%
+        scale_in_cooldown  = 300
+        scale_out_cooldown = 60
+        predefined_metric_specification = {
+          predefined_metric_type = "ECSServiceAverageCPUUtilization"
+        }
       }
     }
   ]
@@ -1214,7 +1210,7 @@ module "bedrock_knowledge_base" {
   storage_type = "PINECONE"
 
   pinecone_config = {
-    connection_string      = "https://texttosql-otehowi.svc.aped-4627-b74a.pinecone.io"
+    connection_string      = var.pinecone_connection_string
     credentials_secret_arn = module.pinecone_api_key.arn
     namespace              = "__default__"
     text_field             = "AMAZON_BEDROCK_TEXT_CHUNK"
