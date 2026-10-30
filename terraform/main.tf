@@ -272,7 +272,7 @@ module "pinecone_api_key" {
   description             = "pinecone_api_key"
   recovery_window_in_days = 0 # Should not be 0 in production
   secret_string = jsonencode({
-    api_key = tostring(data.vault_generic_secret.pinecone.data["api_key"])
+    apiKey = tostring(try(data.vault_generic_secret.pinecone.data["api_key"], data.vault_generic_secret.pinecone.data["apiKey"]))
   })
   tags = {
     Name      = "pinecone-api-key"
@@ -425,7 +425,7 @@ module "frontend_container_registry" {
   source               = "./modules/ecr"
   force_delete         = true
   scan_on_push         = false # Make it true in production 
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = "MUTABLE"
   bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region}"
   name                 = "frontend-td"
   lifecycle_policy = jsonencode({
@@ -469,7 +469,7 @@ module "backend_container_registry" {
   source               = "./modules/ecr"
   force_delete         = true
   scan_on_push         = false # Make it true in production 
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = "MUTABLE"
   bash_command         = "bash ${path.cwd}/../src/backend/artifact_push.sh backend-td ${var.region}"
   name                 = "backend-td"
   lifecycle_policy = jsonencode({
@@ -717,7 +717,7 @@ module "ecs_task_execution_role" {
                   "bedrock:InvokeModel"
                 ],
                 "Resource": [
-                  "arn:aws:bedrock:${var.region}::foundation-model/anthropic.claude-3-opus-20240229-v1:0",
+                  "arn:aws:bedrock:${var.region}::foundation-model/amazon.titan-text-premier-v1:0",
                   "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:agent-alias/${module.bedrock_agent.agent_id}/*"
                 ],
                 "Effect": "Allow"
@@ -753,6 +753,12 @@ module "backend_ecs_log_group" {
 module "ecs" {
   source       = "terraform-aws-modules/ecs/aws"
   cluster_name = "text-to-sql-cluster"
+  cluster_setting = [
+    {
+      name  = "containerInsights"
+      value = "enabled"
+    }
+  ]
   services = {
     ecs_frontend = {
       cpu                    = 2048
@@ -779,7 +785,7 @@ module "ecs" {
           essential = true
           image     = "${module.frontend_container_registry.repository_url}:latest"
           healthCheck = {
-            command = ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"]
+            command = ["CMD-SHELL", "wget -q --spider http://localhost:80/ || exit 1"]
           }
           ulimits = [
             {
@@ -830,7 +836,7 @@ module "ecs" {
         service = {
           target_group_arn = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
           container_name   = "ecs_frontend"
-          container_port   = 3000
+          container_port   = 80
         }
       }
       subnet_ids                    = module.vpc.private_subnets
@@ -1025,8 +1031,8 @@ data "aws_iam_policy_document" "texttosql_bedrock_agent_permissions" {
   statement {
     actions = ["bedrock:InvokeModel"]
     resources = [
-      # Valid Bedrock Foundation Model ID (Claude 3 Opus)
-      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/anthropic.claude-3-opus-20240229-v1:0",
+      # Amazon Titan Text Premier for Agent orchestration
+      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/amazon.titan-text-premier-v1:0",
       # Titan Embeddings used by Knowledge Base
       "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/amazon.titan-embed-text-v2:0"
     ]
@@ -1061,7 +1067,7 @@ module "bedrock_agent" {
 
   agent_name                  = "texttosql-agent"
   description                 = "AI agent for safe text-to-SQL conversion with security guardrails"
-  foundation_model            = "anthropic.claude-3-opus-20240229-v1:0" # FIXED
+  foundation_model            = "amazon.titan-text-premier-v1:0"
   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
   idle_session_ttl_in_seconds = 500
 
@@ -1287,7 +1293,7 @@ module "bedrock_guardrail" {
     }
   ]
 
-  content_tier = "STANDARD"
+  content_tier = "CLASSIC"
 
   # PII Configuration - Critical for database security
   pii_entities = [
@@ -1619,8 +1625,8 @@ module "frontend_lb_unhealthy_hosts" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
-    LoadBalancer = module.frontend_lb.arn
+    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn_suffix
+    LoadBalancer = module.frontend_lb.arn_suffix
   }
 }
 
@@ -1639,8 +1645,8 @@ module "frontend_lb_5xx_errors" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
-    LoadBalancer = module.frontend_lb.arn
+    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn_suffix
+    LoadBalancer = module.frontend_lb.arn_suffix
   }
 }
 
@@ -1659,12 +1665,12 @@ module "frontend_lb_4xx_errors" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn
-    LoadBalancer = module.frontend_lb.arn
+    TargetGroup  = module.frontend_lb.target_groups["frontend_lb_target_group"].arn_suffix
+    LoadBalancer = module.frontend_lb.arn_suffix
   }
 }
 
-# p95 response time — Bedrock claude-opus inference adds 5-8s; track end-to-end at ALB
+# p95 response time — Bedrock titan inference; track end-to-end at ALB
 module "frontend_lb_high_response_time" {
   source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "text-to-sql-frontend-lb-high-response-time"
@@ -1675,12 +1681,12 @@ module "frontend_lb_high_response_time" {
   period              = "60"
   extended_statistic  = "p95"
   statistic           = "Average"
-  threshold           = "10" # 10s — Bedrock claude-opus can take 5-8s alone
+  threshold           = "10" # 10s — Bedrock titan inference
   alarm_description   = "Frontend ALB p95 response time > 10s. Bedrock Agent InvokeAgent calls may be timing out, or RDS query execution is slow after SQL generation."
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    LoadBalancer = module.frontend_lb.arn
+    LoadBalancer = module.frontend_lb.arn_suffix
   }
 }
 
@@ -1699,7 +1705,7 @@ module "frontend_lb_request_surge" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    LoadBalancer = module.frontend_lb.arn
+    LoadBalancer = module.frontend_lb.arn_suffix
   }
 }
 
@@ -1818,7 +1824,7 @@ module "rds_high_cpu" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1837,7 +1843,7 @@ module "rds_low_cpu_credit_balance" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1856,7 +1862,7 @@ module "rds_low_storage" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1875,7 +1881,7 @@ module "rds_high_connections" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1894,7 +1900,7 @@ module "rds_low_freeable_memory" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1909,11 +1915,11 @@ module "rds_high_read_latency" {
   period              = "60"
   statistic           = "Average"
   threshold           = "0.1" # 100ms
-  alarm_description   = "RDS read latency > 100ms. The Bedrock Agent executes generated SQL synchronously — slow reads add directly on top of claude-opus inference time. Users will see 15s+ total response times."
+  alarm_description   = "RDS read latency > 100ms. The Bedrock Agent executes generated SQL synchronously — slow reads add directly on top of Titan inference time. Users will see 15s+ total response times."
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1932,7 +1938,7 @@ module "rds_swap_usage" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1951,7 +1957,7 @@ module "rds_replica_lag" {
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    DBInstanceIdentifier = module.db.name
+    DBInstanceIdentifier = module.db.identifier
   }
 }
 
@@ -1966,11 +1972,11 @@ module "bedrock_invocation_client_errors" {
   period              = "300"
   statistic           = "Sum"
   threshold           = "5"
-  alarm_description   = "Bedrock InvokeModel client errors > 5. Check: (1) texttosql_bedrock_agent_role has bedrock:InvokeModel on claude-opus ARN, (2) model ID matches exactly: anthropic.claude-opus-4-5-20251101-v1:0, (3) region supports claude-opus."
+  alarm_description   = "Bedrock InvokeModel client errors > 5. Check: (1) texttosql_bedrock_agent_role has bedrock:InvokeModel on Titan ARN, (2) model ID matches exactly: amazon.titan-text-premier-v1:0, (3) region supports Titan Premier."
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+    ModelId = "amazon.titan-text-premier-v1:0"
   }
 }
 
@@ -1985,11 +1991,11 @@ module "bedrock_invocation_server_errors" {
   period              = "300"
   statistic           = "Sum"
   threshold           = "3"
-  alarm_description   = "Bedrock server-side errors on claude-opus. AWS-side issue — check Bedrock service health. Your ECS app should implement exponential backoff retry; sustained errors indicate a regional Bedrock incident."
+  alarm_description   = "Bedrock server-side errors on Amazon Titan. AWS-side issue — check Bedrock service health. Your ECS app should implement exponential backoff retry; sustained errors indicate a regional Bedrock incident."
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+    ModelId = "amazon.titan-text-premier-v1:0"
   }
 }
 
@@ -2004,11 +2010,11 @@ module "bedrock_throttles" {
   period              = "300"
   statistic           = "Sum"
   threshold           = "5"
-  alarm_description   = "Bedrock InvokeModel throttled. Claude Opus has strict TPM limits. Text-to-SQL prompts with full schema context injected from the Pinecone knowledge base can be very token-heavy. Request a Bedrock quota increase if this fires regularly."
+  alarm_description   = "Bedrock InvokeModel throttled. Amazon Titan has TPM limits. Text-to-SQL prompts with full schema context injected from the Pinecone knowledge base can be token-heavy. Request a Bedrock quota increase if this fires regularly."
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+    ModelId = "amazon.titan-text-premier-v1:0"
   }
 }
 
@@ -2023,11 +2029,11 @@ module "bedrock_high_input_tokens" {
   period              = "300"
   statistic           = "Sum"
   threshold           = "500000" # 500K tokens per 5 min — tune to baseline
-  alarm_description   = "Bedrock input token count spike. Claude Opus input is billed per token — a spike here means significant unexpected cost. Check if the Pinecone knowledge base is injecting oversized schema context into the PRE_PROCESSING or ORCHESTRATION prompts."
+  alarm_description   = "Bedrock input token count spike. Titan input is billed per token — a spike here means significant unexpected cost. Check if the Pinecone knowledge base is injecting oversized schema context into the PRE_PROCESSING or ORCHESTRATION prompts."
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]
   dimensions = {
-    ModelId = "anthropic.claude-opus-4-5-20251101-v1:0"
+    ModelId = "amazon.titan-text-premier-v1:0"
   }
 }
 
@@ -2073,13 +2079,13 @@ module "cognito_low_signin_successes" {
 module "cognito_token_refresh_failures" {
   source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "text-to-sql-cognito-token-refresh-failures"
-  comparison_operator = "GreaterThanThreshold"
+  comparison_operator = "LessThanThreshold"
   evaluation_periods  = "2"
   metric_name         = "TokenRefreshSuccesses"
   namespace           = "AWS/Cognito"
   period              = "300"
   statistic           = "Sum"
-  threshold           = "0"
+  threshold           = "1"
   alarm_description   = "Cognito token refresh activity anomaly. Users may be getting logged out prematurely. Verify logout_url http://<alb-dns>/logout still matches the deployed ALB DNS and the texttosql_client config."
   alarm_actions       = [module.alarm_notifications.topic_arn]
   ok_actions          = [module.alarm_notifications.topic_arn]

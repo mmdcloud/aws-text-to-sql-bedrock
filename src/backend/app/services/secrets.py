@@ -89,7 +89,10 @@ class SecretsManagerService:
     def get_pinecone_api_key(self) -> str:
         """Returns the raw Pinecone API key string."""
         name = current_app.config["SM_PINECONE_SECRET_NAME"]
-        return self.get_secret(name)["api_key"]
+        secret = self.get_secret(name)
+        if isinstance(secret, dict):
+            return secret.get("apiKey") or secret.get("api_key") or ""
+        return str(secret)
 
     def invalidate(self, secret_name: Optional[str] = None) -> None:
         """Force-evict one or all cached secrets (useful after rotation)."""

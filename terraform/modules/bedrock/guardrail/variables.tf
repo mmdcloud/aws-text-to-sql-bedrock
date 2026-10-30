@@ -30,9 +30,9 @@ variable "content_filters" {
 }
 
 variable "content_tier" {
-  description = "Content tier (STANDARD or ADVANCED)"
+  description = "Content tier (CLASSIC or STANDARD)"
   type        = string
-  default     = "STANDARD"
+  default     = "CLASSIC"
 }
 
 variable "pii_entities" {

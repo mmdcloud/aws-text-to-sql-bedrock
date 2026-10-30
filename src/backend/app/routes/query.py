@@ -4,7 +4,7 @@ Query blueprint — the core text-to-SQL endpoint.
 Full request lifecycle per query:
   1.  Authenticate  — Cognito JWT via @cognito_required
   2.  Validate      — question length, type, sanitisation
-  3.  Bedrock       — invoke texttosql-agent (Claude Opus 4.5 + Pinecone KB + guardrails)
+  3.  Bedrock       — invoke texttosql-agent (Amazon Titan Text Premier + Pinecone KB + guardrails)
   4.  Execute       — run the returned SQL against RDS (read-only session)
   5.  Save history  — write every query attempt to query_history (always, even on error)
   6.  Respond       — return SQL + explanation + result set

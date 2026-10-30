@@ -1,7 +1,7 @@
 """
 Bedrock Agent service.
 
-Invokes the `texttosql-agent` (Claude Opus 4.5) with the Pinecone knowledge
+Invokes the `texttosql-agent` (Amazon Titan Text Premier) with the Pinecone knowledge
 base and guardrails configured in Terraform.
 
 Key design decisions:

@@ -35,11 +35,11 @@ _FORBIDDEN_PATTERN = re.compile(
 class DatabaseService:
 
     def __init__(self):
-        self._engine: sa.Engine | None = None
+        self._engine: sa.engine.Engine | None = None
 
     # ── Engine ────────────────────────────────────────────────────────────
 
-    def _build_engine(self) -> sa.Engine:
+    def _build_engine(self) -> sa.engine.Engine:
         cfg = current_app.config
         creds = secrets_service.get_rds_credentials()
 
@@ -82,7 +82,7 @@ class DatabaseService:
         logger.info("database.engine_created", extra={"host": cfg["DB_HOST"], "db": cfg["DB_NAME"]})
         return engine
 
-    def _get_engine(self) -> sa.Engine:
+    def _get_engine(self) -> sa.engine.Engine:
         if self._engine is None:
             self._engine = self._build_engine()
         return self._engine
