@@ -5,3 +5,7 @@ output "endpoint" {
 output "name" {
   value = aws_db_instance.db.db_name
 }
+
+output "identifier" {
+  value = aws_db_instance.db.identifier
+}

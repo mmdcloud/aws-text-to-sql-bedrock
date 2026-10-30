@@ -5,6 +5,7 @@ resource "aws_bedrockagent_agent" "this" {
   foundation_model            = var.foundation_model
   idle_session_ttl_in_seconds = var.idle_session_ttl_in_seconds
   instruction                 = var.instruction
+  prepare_agent               = true
 
   dynamic "guardrail_configuration" {
     for_each = var.guardrail_identifier != null ? [1] : []

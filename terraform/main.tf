@@ -128,8 +128,8 @@ module "ecs_frontend_sg" {
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      from_port       = 3000
-      to_port         = 3000
+      from_port       = 80 # FIXED from 3000
+      to_port         = 80 # FIXED from 3000
       protocol        = "tcp"
       cidr_blocks     = []
       security_groups = [module.frontend_lb_sg.id]
@@ -286,7 +286,7 @@ module "pinecone_api_key" {
 # -----------------------------------------------------------------------------------------
 module "bedrock_knowledge_base_data_source" {
   source        = "./modules/s3"
-  bucket_name   = "bedrock-knowledge-base-data-source"
+  bucket_name   = "bedrock-knowledge-base-data-source-${random_id.id.hex}"
   objects       = []
   bucket_policy = ""
   cors = [
@@ -314,37 +314,31 @@ module "bedrock_knowledge_base_data_source" {
 
 module "frontend_lb_logs" {
   source      = "./modules/s3"
-  bucket_name = "frontend-lb-logs"
+  bucket_name = "frontend-lb-logs-${random_id.id.hex}"
   objects     = []
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AWSLogDeliveryWrite"
-        Effect = "Allow"
-        Principal = {
-          Service = "logging.s3.amazonaws.com"
-        }
-        Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}/*"
+        Sid       = "AWSLogDeliveryWrite"
+        Effect    = "Allow"
+        Principal = { Service = "logging.s3.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}/*"
       },
       {
-        Sid    = "AWSLogDeliveryAclCheck"
-        Effect = "Allow"
-        Principal = {
-          Service = "logging.s3.amazonaws.com"
-        }
-        Action   = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}"
+        Sid       = "AWSLogDeliveryAclCheck"
+        Effect    = "Allow"
+        Principal = { Service = "logging.s3.amazonaws.com" }
+        Action    = "s3:GetBucketAcl"
+        Resource  = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}"
       },
       {
-        Sid    = "AWSELBAccountWrite"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
-        }
-        Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}/*"
+        Sid       = "AWSELBAccountWrite"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root" }
+        Action    = "s3:PutObject"
+        Resource  = "arn:aws:s3:::frontend-lb-logs-${random_id.id.hex}/*"
       }
     ]
   })
@@ -373,37 +367,31 @@ module "frontend_lb_logs" {
 
 module "backend_lb_logs" {
   source      = "./modules/s3"
-  bucket_name = "backend-lb-logs"
+  bucket_name = "backend-lb-logs-${random_id.id.hex}"
   objects     = []
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AWSLogDeliveryWrite"
-        Effect = "Allow"
-        Principal = {
-          Service = "logging.s3.amazonaws.com"
-        }
-        Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}/*"
+        Sid       = "AWSLogDeliveryWrite"
+        Effect    = "Allow"
+        Principal = { Service = "logging.s3.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}/*"
       },
       {
-        Sid    = "AWSLogDeliveryAclCheck"
-        Effect = "Allow"
-        Principal = {
-          Service = "logging.s3.amazonaws.com"
-        }
-        Action   = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}"
+        Sid       = "AWSLogDeliveryAclCheck"
+        Effect    = "Allow"
+        Principal = { Service = "logging.s3.amazonaws.com" }
+        Action    = "s3:GetBucketAcl"
+        Resource  = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}"
       },
       {
-        Sid    = "AWSELBAccountWrite"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
-        }
-        Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}/*"
+        Sid       = "AWSELBAccountWrite"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root" }
+        Action    = "s3:PutObject"
+        Resource  = "arn:aws:s3:::backend-lb-logs-${random_id.id.hex}/*"
       }
     ]
   })
@@ -556,7 +544,7 @@ module "db" {
   parameters = [
     {
       name  = "max_connections"
-      value = "100" 
+      value = "100"
     },
     {
       name  = "innodb_buffer_pool_size"
@@ -605,14 +593,14 @@ module "frontend_lb" {
   target_groups = {
     frontend_lb_target_group = {
       backend_protocol = "HTTP"
-      backend_port     = 3000
+      backend_port     = 80 # FIXED from 3000
       target_type      = "ip"
       health_check = {
         enabled             = true
         healthy_threshold   = 3
         interval            = 30
-        path                = "/auth/signin"
-        port                = 3000
+        path                = "/" # FIXED from /auth/signin
+        port                = 80  # FIXED from 3000
         protocol            = "HTTP"
         unhealthy_threshold = 3
       }
@@ -723,14 +711,14 @@ module "ecs_task_execution_role" {
                 "${module.pinecone_api_key.arn}"
               ]
             },
-            {
+                        {
                 "Action": [
                   "bedrock:InvokeAgent",
                   "bedrock:InvokeModel"
                 ],
                 "Resource": [
-                  "arn:aws:bedrock:${var.region}::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
-                  "${module.bedrock_agent.agent_arn}"
+                  "arn:aws:bedrock:${var.region}::foundation-model/anthropic.claude-3-opus-20240229-v1:0",
+                  "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:agent-alias/${module.bedrock_agent.agent_id}/*"
                 ],
                 "Effect": "Allow"
             }
@@ -803,8 +791,8 @@ module "ecs" {
           portMappings = [
             {
               name          = "ecs_frontend"
-              containerPort = 3000
-              hostPort      = 3000
+              containerPort = 80
+              hostPort      = 80
               protocol      = "tcp"
             }
           ]
@@ -893,6 +881,26 @@ module "ecs" {
             {
               name  = "DB_NAME"
               value = "${module.db.name}"
+            },
+            {
+              name  = "AWS_REGION"
+              value = var.region
+            },
+            {
+              name  = "COGNITO_USER_POOL_ID"
+              value = module.cognito.user_pool_id
+            },
+            {
+              name  = "COGNITO_CLIENT_ID"
+              value = module.cognito.client_ids[0]
+            },
+            {
+              name  = "BEDROCK_AGENT_ID"
+              value = module.bedrock_agent.agent_id
+            },
+            {
+              name  = "BEDROCK_AGENT_ALIAS"
+              value = "TSTALIASID"
             }
           ]
           portMappings = [
@@ -950,24 +958,15 @@ module "frontend_app_autoscaling_policy" {
   service_namespace  = "ecs"
   policies = [
     {
-      name        = "worker-scale-up"
-      policy_type = "StepScaling"
-      step_scaling_policy_configuration = {
-        adjustment_type         = "ChangeInCapacity"
-        cooldown                = 60
-        metric_aggregation_type = "Average"
-        # min_adjustment_magnitude = 1
-        step_adjustment = [
-          {
-            metric_interval_lower_bound = 0
-            metric_interval_upper_bound = 20
-            scaling_adjustment          = 1
-          },
-          {
-            metric_interval_lower_bound = 20
-            scaling_adjustment          = 2
-          }
-        ]
+      name        = "frontend-cpu-scale"
+      policy_type = "TargetTrackingScaling"
+      target_tracking_scaling_policy_configuration = {
+        target_value       = 60.0
+        scale_in_cooldown  = 300
+        scale_out_cooldown = 60
+        predefined_metric_specification = {
+          predefined_metric_type = "ECSServiceAverageCPUUtilization"
+        }
       }
     }
   ]
@@ -999,6 +998,7 @@ module "backend_app_autoscaling_policy" {
 # ---------------------------------------------------------------------
 # Bedrock Configuration
 # ---------------------------------------------------------------------
+# Bedrock Trust Policy allowing both Agent and Knowledge Base services
 data "aws_iam_policy_document" "texttosql_bedrock_agent_trust" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -1012,27 +1012,45 @@ data "aws_iam_policy_document" "texttosql_bedrock_agent_trust" {
       variable = "aws:SourceAccount"
     }
     condition {
-      test     = "ArnLike"
-      values   = ["arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:agent/*"]
+      test = "ArnLike"
+      values = [
+        "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:agent/*",
+        "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:knowledge-base/*"
+      ]
       variable = "AWS:SourceArn"
     }
   }
 }
-
 data "aws_iam_policy_document" "texttosql_bedrock_agent_permissions" {
   statement {
     actions = ["bedrock:InvokeModel"]
     resources = [
-      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
+      # Valid Bedrock Foundation Model ID (Claude 3 Opus)
+      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/anthropic.claude-3-opus-20240229-v1:0",
+      # Titan Embeddings used by Knowledge Base
+      "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}::foundation-model/amazon.titan-embed-text-v2:0"
     ]
   }
+  statement {
+    actions   = ["bedrock:Retrieve", "bedrock:RetrieveAndGenerate"]
+    resources = ["*"]
+  }
+  statement {
+    actions = ["s3:GetObject", "s3:ListBucket"]
+    resources = [
+      module.bedrock_knowledge_base_data_source.arn,
+      "${module.bedrock_knowledge_base_data_source.arn}/*"
+    ]
+  }
+  statement {
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [module.pinecone_api_key.arn]
+  }
 }
-
 resource "aws_iam_role" "texttosql_bedrock_agent_role" {
   assume_role_policy = data.aws_iam_policy_document.texttosql_bedrock_agent_trust.json
   name_prefix        = "AmazonBedrockExecutionRoleForAgents_"
 }
-
 resource "aws_iam_role_policy" "texttosql_bedrock_agent_role_policy" {
   policy = data.aws_iam_policy_document.texttosql_bedrock_agent_permissions.json
   role   = aws_iam_role.texttosql_bedrock_agent_role.id
@@ -1043,7 +1061,7 @@ module "bedrock_agent" {
 
   agent_name                  = "texttosql-agent"
   description                 = "AI agent for safe text-to-SQL conversion with security guardrails"
-  foundation_model            = "anthropic.claude-opus-4-5-20251101-v1:0"
+  foundation_model            = "anthropic.claude-3-opus-20240229-v1:0" # FIXED
   agent_resource_role_arn     = aws_iam_role.texttosql_bedrock_agent_role.arn
   idle_session_ttl_in_seconds = 500
 
