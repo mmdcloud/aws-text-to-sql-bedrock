@@ -240,8 +240,8 @@ module "cognito" {
       allowed_oauth_flows_user_pool_client = true
       allowed_oauth_flows                  = ["code", "implicit"]
       allowed_oauth_scopes                 = ["email", "openid"]
-      callback_urls                        = ["http://${module.frontend_lb.dns_name}/callback"]
-      logout_urls                          = ["http://${module.frontend_lb.dns_name}/logout"]
+      callback_urls                        = ["https://${module.frontend_lb.dns_name}/callback", "http://localhost:5173/callback"]
+      logout_urls                          = ["https://${module.frontend_lb.dns_name}/logout", "http://localhost:5173/logout"]
       supported_identity_providers         = ["COGNITO"]
     }
   ]
@@ -293,13 +293,13 @@ module "bedrock_knowledge_base_data_source" {
     {
       allowed_headers = ["Authorization", "Content-Type"]
       allowed_methods = ["GET"]
-      allowed_origins = ["https://${var.domain_name}"] # was ["*"]
+      allowed_origins = ["*"] # was ["*"]
       max_age_seconds = 3000
     },
     {
       allowed_headers = ["Authorization", "Content-Type"]
       allowed_methods = ["PUT"]
-      allowed_origins = ["https://${var.domain_name}"] # was ["*"]
+      allowed_origins = ["*"] # was ["*"]
       max_age_seconds = 3000
     }
   ]
@@ -426,7 +426,7 @@ module "frontend_container_registry" {
   force_delete         = true
   scan_on_push         = false # Make it true in production 
   image_tag_mutability = "MUTABLE"
-  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region}"
+  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh frontend-td ${var.region} ${module.cognito.user_pool_id} ${module.cognito.client_ids[0]}"
   name                 = "frontend-td"
   lifecycle_policy = jsonencode({
     rules = [
@@ -664,6 +664,33 @@ module "backend_lb" {
 }
 
 # ---------------------------------------------------------------------
+# Internal DNS (Route 53 Private Hosted Zone)
+# ---------------------------------------------------------------------
+resource "aws_route53_zone" "internal" {
+  name = "text-to-sql.internal"
+  vpc {
+    vpc_id = module.vpc.vpc_id
+  }
+  tags = {
+    Name      = "text-to-sql-internal-zone"
+    ManagedBy = "terraform"
+    Project   = "text-to-sql"
+  }
+}
+
+resource "aws_route53_record" "backend_lb" {
+  zone_id = aws_route53_zone.internal.zone_id
+  name    = "backend-lb.text-to-sql.internal"
+  type    = "A"
+
+  alias {
+    name                   = module.backend_lb.dns_name
+    zone_id                = module.backend_lb.zone_id
+    evaluate_target_health = true
+  }
+}
+
+# ---------------------------------------------------------------------
 # ECS configuration
 # ---------------------------------------------------------------------
 module "ecs_task_execution_role" {
@@ -718,7 +745,7 @@ module "ecs_task_execution_role" {
                 ],
                 "Resource": [
                   "arn:aws:bedrock:${var.region}::foundation-model/amazon.titan-text-premier-v1:0",
-                  "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:agent-alias/${module.bedrock_agent.agent_id}/*"
+                  "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:agent-alias/*"
                 ],
                 "Effect": "Allow"
             }
@@ -761,12 +788,29 @@ module "ecs" {
   ]
   services = {
     ecs_frontend = {
-      cpu                    = 2048
-      memory                 = 4096
-      task_exec_iam_role_arn = module.ecs_task_execution_role.arn
-      iam_role_arn           = module.ecs_task_execution_role.arn
-      desired_count          = 2
-      assign_public_ip       = false
+      cpu                       = 256
+      memory                    = 512
+      create_tasks_iam_role     = false
+      tasks_iam_role_arn        = module.ecs_task_execution_role.arn
+      create_task_exec_iam_role = false
+      task_exec_iam_role_arn    = module.ecs_task_execution_role.arn
+      desired_count             = 2
+      autoscaling_min_capacity  = 2
+      autoscaling_max_capacity  = 10
+      autoscaling_policies = {
+        cpu = {
+          policy_type = "TargetTrackingScaling"
+          target_tracking_scaling_policy_configuration = {
+            target_value       = 60.0
+            scale_in_cooldown  = 300
+            scale_out_cooldown = 60
+            predefined_metric_specification = {
+              predefined_metric_type = "ECSServiceAverageCPUUtilization"
+            }
+          }
+        }
+      }
+      assign_public_ip         = false
       deployment_controller = {
         type = "ECS"
       }
@@ -780,8 +824,8 @@ module "ecs" {
       requires_compatibilities = ["FARGATE"]
       container_definitions = {
         ecs_frontend = {
-          cpu       = 1024
-          memory    = 2048
+          cpu       = 256
+          memory    = 512
           essential = true
           image     = "${module.frontend_container_registry.repository_url}:latest"
           healthCheck = {
@@ -803,18 +847,19 @@ module "ecs" {
             }
           ]
           environment = [
-            # {
-            #   name  = "BASE_URL"
-            #   value = "${module.backend_lb.dns_name}"
-            # }
-          ]
-          capacity_provider_strategy = {
-            ASG = {
-              base              = 20
-              capacity_provider = "ASG"
-              weight            = 50
+            {
+              name  = "VITE_COGNITO_USER_POOL_ID"
+              value = module.cognito.user_pool_id
+            },
+            {
+              name  = "VITE_COGNITO_CLIENT_ID"
+              value = module.cognito.client_ids[0]
+            },
+            {
+              name  = "VITE_AWS_REGION"
+              value = var.region
             }
-          }
+          ]
           readonlyRootFilesystem = false
           logConfiguration = {
             logDriver = "awslogs"
@@ -846,12 +891,29 @@ module "ecs" {
     }
 
     ecs_backend = {
-      cpu                    = 2048
-      memory                 = 4096
-      task_exec_iam_role_arn = module.ecs_task_execution_role.arn
-      iam_role_arn           = module.ecs_task_execution_role.arn
-      desired_count          = 2
-      assign_public_ip       = false
+      cpu                       = 512
+      memory                    = 1024
+      create_tasks_iam_role     = false
+      tasks_iam_role_arn        = module.ecs_task_execution_role.arn
+      create_task_exec_iam_role = false
+      task_exec_iam_role_arn    = module.ecs_task_execution_role.arn
+      desired_count             = 2
+      autoscaling_min_capacity  = 2
+      autoscaling_max_capacity  = 10
+      autoscaling_policies = {
+        cpu = {
+          policy_type = "TargetTrackingScaling"
+          target_tracking_scaling_policy_configuration = {
+            target_value       = 60.0
+            scale_in_cooldown  = 300
+            scale_out_cooldown = 60
+            predefined_metric_specification = {
+              predefined_metric_type = "ECSServiceAverageCPUUtilization"
+            }
+          }
+        }
+      }
+      assign_public_ip         = false
       deployment_controller = {
         type = "ECS"
       }
@@ -865,8 +927,8 @@ module "ecs" {
       requires_compatibilities = ["FARGATE"]
       container_definitions = {
         ecs_backend = {
-          cpu       = 1024
-          memory    = 2048
+          cpu       = 512
+          memory    = 1024
           essential = true
           image     = "${module.backend_container_registry.repository_url}:latest"
           healthCheck = {
@@ -902,7 +964,7 @@ module "ecs" {
             },
             {
               name  = "BEDROCK_AGENT_ID"
-              value = module.bedrock_agent.agent_id
+              value = var.bedrock_agent_id != "" ? var.bedrock_agent_id : (var.enable_bedrock_agent ? module.bedrock_agent[0].agent_id : "DISABLED")
             },
             {
               name  = "BEDROCK_AGENT_ALIAS"
@@ -953,52 +1015,6 @@ module "ecs" {
     Project   = "text-to-sql"
   }
   depends_on = [module.cognito]
-}
-
-module "frontend_app_autoscaling_policy" {
-  source             = "./modules/autoscaling"
-  min_capacity       = 2
-  max_capacity       = 10
-  resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs_frontend"].name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
-  policies = [
-    {
-      name        = "frontend-cpu-scale"
-      policy_type = "TargetTrackingScaling"
-      target_tracking_scaling_policy_configuration = {
-        target_value       = 60.0
-        scale_in_cooldown  = 300
-        scale_out_cooldown = 60
-        predefined_metric_specification = {
-          predefined_metric_type = "ECSServiceAverageCPUUtilization"
-        }
-      }
-    }
-  ]
-}
-
-module "backend_app_autoscaling_policy" {
-  source             = "./modules/autoscaling"
-  min_capacity       = 2
-  max_capacity       = 10
-  resource_id        = "service/${module.ecs.cluster_name}/${module.ecs.services["ecs_backend"].name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
-  policies = [
-    {
-      name        = "worker-scale-up"
-      policy_type = "TargetTrackingScaling"
-      target_tracking_scaling_policy_configuration = {
-        target_value       = 60.0 # scale when avg CPU hits 60%
-        scale_in_cooldown  = 300
-        scale_out_cooldown = 60
-        predefined_metric_specification = {
-          predefined_metric_type = "ECSServiceAverageCPUUtilization"
-        }
-      }
-    }
-  ]
 }
 
 # ---------------------------------------------------------------------
@@ -1063,6 +1079,7 @@ resource "aws_iam_role_policy" "texttosql_bedrock_agent_role_policy" {
 }
 
 module "bedrock_agent" {
+  count  = var.enable_bedrock_agent ? 1 : 0
   source = "./modules/bedrock/agent"
 
   agent_name                  = "texttosql-agent"
@@ -1123,7 +1140,7 @@ module "bedrock_agent" {
   # Knowledge Base Association
   knowledge_bases = [
     {
-      knowledge_base_id    = module.bedrock_knowledge_base.knowledge_base_id
+      knowledge_base_id    = module.bedrock_knowledge_base[0].knowledge_base_id
       description          = "Database schemas, documentation, and SQL best practices"
       knowledge_base_state = "ENABLED"
     }
@@ -1221,6 +1238,7 @@ module "bedrock_agent" {
 }
 
 module "bedrock_knowledge_base" {
+  count  = var.enable_bedrock_agent ? 1 : 0
   source = "./modules/bedrock/knowledge-base"
 
   name        = "texttosql-knowledge-base"
@@ -2094,9 +2112,14 @@ module "cognito_token_refresh_failures" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "cloudtrail" {
+  name              = "/aws/cloudtrail"
+  retention_in_days = 14
+}
+
 resource "aws_cloudwatch_log_metric_filter" "secretsmanager_throttles" {
   name           = "text-to-sql-secretsmanager-throttles"
-  log_group_name = "/aws/cloudtrail" # update to match your CloudTrail log group
+  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
   pattern        = "{ ($.eventSource = \"secretsmanager.amazonaws.com\") && ($.errorCode = \"ThrottlingException\") }"
 
   metric_transformation {

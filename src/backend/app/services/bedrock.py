@@ -128,6 +128,51 @@ class BedrockAgentService:
             f"Bedrock agent throttled after {max_retries} retries."
         ) from last_exc
 
+    def _invoke_foundation_model(self, user_question: str, session_id: str) -> Dict[str, Any]:
+        """
+        Direct invocation of Amazon Titan Text Premier via bedrock-runtime.
+        Bypasses Bedrock Agents Classic (which is in AWS Maintenance Mode for new accounts).
+        """
+        runtime = boto3.client(
+            "bedrock-runtime",
+            region_name=current_app.config.get("AWS_REGION", "us-east-1"),
+        )
+        prompt = (
+            "You are a specialized SQL generation assistant. Convert the following natural language query "
+            "into a safe, read-only SELECT SQL query for MySQL.\n\n"
+            "Rules:\n"
+            "- ONLY generate SELECT statements (never DROP, DELETE, UPDATE, INSERT, ALTER)\n"
+            "- Wrap the SQL statement in a ```sql ... ``` block\n"
+            "- Include a brief explanation of what the query does below the SQL block\n\n"
+            f"User Question: {user_question}\n"
+        )
+        body = json.dumps({
+            "inputText": prompt,
+            "textGenerationConfig": {
+                "maxTokenCount": 2048,
+                "temperature": 0.0,
+                "topP": 0.9,
+                "stopSequences": [],
+            },
+        })
+        logger.info("bedrock.invoking_foundation_model", extra={"model_id": "amazon.titan-text-premier-v1:0"})
+        response = runtime.invoke_model(
+            modelId="amazon.titan-text-premier-v1:0",
+            body=body,
+            contentType="application/json",
+            accept="application/json",
+        )
+        payload = json.loads(response["body"].read().decode("utf-8"))
+        results = payload.get("results", [{}])[0]
+        output_text = results.get("outputText", "")
+        sql = self._extract_sql(output_text)
+        return {
+            "sql":         sql,
+            "explanation": output_text,
+            "session_id":  session_id,
+            "blocked":     False,
+        }
+
     # ── Public API ────────────────────────────────────────────────────────
 
     def generate_sql(
@@ -137,30 +182,16 @@ class BedrockAgentService:
         enable_trace: bool = False,
     ) -> Dict[str, Any]:
         """
-        Send a natural language question to the Bedrock text-to-SQL agent.
-
-        Args:
-            user_question: The user's natural language database query.
-            session_id:    Per-user session ID (Cognito sub) for multi-turn context.
-            enable_trace:  Whether to capture full agent trace (dev/debug only).
-
-        Returns:
-            {
-                "sql":         str | None,   # extracted SQL statement
-                "explanation": str,          # agent's full text response
-                "session_id":  str,
-                "blocked":     bool,         # True if guardrail blocked the request
-            }
-
-        Raises:
-            RuntimeError on unrecoverable Bedrock errors.
+        Send a natural language question to Bedrock to generate SQL.
+        Falls back to direct Titan Premier foundation model if Bedrock Agent is disabled or unavailable.
         """
         cfg      = current_app.config
-        agent_id = cfg["BEDROCK_AGENT_ID"]
-        alias_id = cfg["BEDROCK_AGENT_ALIAS"]
+        agent_id = cfg.get("BEDROCK_AGENT_ID", "")
+        alias_id = cfg.get("BEDROCK_AGENT_ALIAS", "TSTALIASID")
 
-        if not agent_id:
-            raise RuntimeError("BEDROCK_AGENT_ID is not configured.")
+        # If agent is disabled, use Titan Premier directly via bedrock-runtime
+        if not agent_id or agent_id in ("DISABLED", "NONE", "MOCK"):
+            return self._invoke_foundation_model(user_question, session_id)
 
         logger.info(
             "bedrock.invoking_agent",
@@ -171,13 +202,20 @@ class BedrockAgentService:
             },
         )
 
-        agent_response = self._invoke_with_retry(
-            agent_id=agent_id,
-            alias_id=alias_id,
-            session_id=session_id,
-            user_input=user_question,
-            enable_trace=enable_trace,
-        )
+        try:
+            agent_response = self._invoke_with_retry(
+                agent_id=agent_id,
+                alias_id=alias_id,
+                session_id=session_id,
+                user_input=user_question,
+                enable_trace=enable_trace,
+            )
+        except Exception as exc:
+            err_str = str(exc)
+            if "Maintenance Mode" in err_str or "AccessDeniedException" in err_str or "ValidationException" in err_str:
+                logger.warning("bedrock.agent_fallback_to_model", extra={"error": err_str})
+                return self._invoke_foundation_model(user_question, session_id)
+            raise
 
         # Detect guardrail blocks — the guardrail blocked_outputs_messaging
         # is set in Terraform: "The generated SQL was blocked due to safety policies."

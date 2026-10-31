@@ -19,6 +19,10 @@ resource "aws_ecr_lifecycle_policy" "lifecycle_policy" {
 }
 
 resource "null_resource" "push_image_to_ecr" {
+  triggers = {
+    command = var.bash_command
+  }
+
   provisioner "local-exec" {
     command = var.bash_command
   }
